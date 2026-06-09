@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  enet_godot.h                                                          */
+/*  entropy_switch.cpp                                                    */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -28,54 +28,43 @@
 /* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
 /**************************************************************************/
 
-/**
- @file  enet_godot.h
- @brief ENet Godot header
-*/
+#include "switch_wrapper.h"
 
-#ifndef __ENET_GODOT_H__
-#define __ENET_GODOT_H__
+#include <cstddef>
+#include <cstdint>
+#include <ctime>
 
-#ifdef WINDOWS_ENABLED
-#include <stdint.h>
-#include <winsock2.h>
-#endif
-#if defined(UNIX_ENABLED) || defined(HORIZON_ENABLED)
-#include <arpa/inet.h>
-#endif
+// Entropy source for mbedTLS (MBEDTLS_ENTROPY_HARDWARE_ALT), backed by the
+// Horizon CSRNG service. Only referenced when the mbedtls module is enabled.
+extern "C" int mbedtls_hardware_poll(void *data, unsigned char *output, size_t len, size_t *olen) {
+	(void)data;
+	randomGet(output, len);
+	*olen = len;
+	return 0;
+}
 
-#ifdef MSG_MAXIOVLEN
-#define ENET_BUFFER_MAXIMUM MSG_MAXIOVLEN
-#endif
+// newlib declares posix_memalign() but does not implement it; astcenc and
+// other thirdparty code link against it.
+#include <cerrno>
+#include <malloc.h>
 
-typedef void *ENetSocket;
+extern "C" int posix_memalign(void **memptr, size_t alignment, size_t size) {
+	if (alignment % sizeof(void *) != 0 || (alignment & (alignment - 1)) != 0) {
+		return EINVAL;
+	}
+	void *mem = memalign(alignment, size);
+	if (!mem) {
+		return ENOMEM;
+	}
+	*memptr = mem;
+	return 0;
+}
 
-#define ENET_SOCKET_NULL NULL
-
-#define ENET_HOST_TO_NET_16(value) (htons(value)) /**< macro that converts host to net byte-order of a 16-bit value */
-#define ENET_HOST_TO_NET_32(value) (htonl(value)) /**< macro that converts host to net byte-order of a 32-bit value */
-
-#define ENET_NET_TO_HOST_16(value) (ntohs(value)) /**< macro that converts net to host byte-order of a 16-bit value */
-#define ENET_NET_TO_HOST_32(value) (ntohl(value)) /**< macro that converts net to host byte-order of a 32-bit value */
-
-typedef struct
-{
-	void *data;
-	size_t dataLength;
-} ENetBuffer;
-
-#define ENET_CALLBACK
-
-#define ENET_API extern
-
-typedef void ENetSocketSet;
-
-typedef struct _ENetAddress
-{
-   uint8_t host[16];
-   uint16_t port;
-   uint8_t wildcard;
-} ENetAddress;
-#define enet_host_equal(host_a, host_b) (memcmp(&host_a, &host_b,16) == 0)
-
-#endif /* __ENET_GODOT_H__ */
+// Monotonic millisecond clock for mbedTLS (MBEDTLS_PLATFORM_MS_TIME_ALT).
+extern "C" int64_t mbedtls_ms_time(void) {
+	struct timespec tv;
+	if (clock_gettime(CLOCK_MONOTONIC, &tv) != 0) {
+		return (int64_t)time(nullptr) * 1000;
+	}
+	return (int64_t)tv.tv_sec * 1000 + tv.tv_nsec / 1000000;
+}

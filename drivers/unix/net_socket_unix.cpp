@@ -30,7 +30,7 @@
 
 // Some proprietary Unix-derived platforms don't expose Unix sockets
 // so this allows skipping this file to reimplement this API differently.
-#if defined(UNIX_ENABLED) && !defined(UNIX_SOCKET_UNAVAILABLE)
+#if (defined(UNIX_ENABLED) || defined(HORIZON_ENABLED)) && !defined(UNIX_SOCKET_UNAVAILABLE)
 
 #include "net_socket_unix.h"
 
@@ -49,8 +49,16 @@
 #include <cstdio>
 #include <cstdlib>
 
-#ifdef WEB_ENABLED
+#if defined(WEB_ENABLED) || defined(HORIZON_ENABLED)
 #include <arpa/inet.h>
+#endif
+
+#ifdef HORIZON_ENABLED
+// libnx headers reference ipv6_mreq in the setsockopt docs but don't define it.
+struct ipv6_mreq {
+	struct in6_addr ipv6mr_multiaddr;
+	unsigned int ipv6mr_interface;
+};
 #endif
 
 // BSD calls this flag IPV6_JOIN_GROUP

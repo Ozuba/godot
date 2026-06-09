@@ -28,7 +28,7 @@
 /* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
 /**************************************************************************/
 
-#if defined(UNIX_ENABLED) && !defined(UNIX_SOCKET_UNAVAILABLE)
+#if (defined(UNIX_ENABLED) || defined(HORIZON_ENABLED)) && !defined(UNIX_SOCKET_UNAVAILABLE)
 
 #include "ip_unix.h"
 
@@ -38,6 +38,8 @@
 // We could drop this file once we up our API level to 24,
 // where the NDK's ifaddrs.h supports to needed getifaddrs.
 #include <thirdparty/misc/ifaddrs-android.h>
+#elif defined(HORIZON_ENABLED)
+// newlib on Horizon has no getifaddrs().
 #else
 #ifdef __FreeBSD__
 #include <sys/types.h>
@@ -116,6 +118,21 @@ void IPUnix::_resolve_hostname(List<IPAddress> &r_addresses, const String &p_hos
 }
 
 void IPUnix::get_local_interfaces(HashMap<String, Interface_Info> *r_interfaces) const {
+#ifdef HORIZON_ENABLED
+	// No getifaddrs(); report the default interface address from gethostid()-style API.
+	struct in_addr addr;
+	addr.s_addr = gethostid();
+	if (addr.s_addr != 0 && addr.s_addr != INADDR_LOOPBACK) {
+		Interface_Info info;
+		info.name = "default";
+		info.name_friendly = "default";
+		info.index = "1";
+		IPAddress ip;
+		ip.set_ipv4((uint8_t *)&addr.s_addr);
+		info.ip_addresses.push_front(ip);
+		r_interfaces->insert(info.name, info);
+	}
+#else
 	struct ifaddrs *ifAddrStruct = nullptr;
 	struct ifaddrs *ifa = nullptr;
 	int family;
@@ -150,6 +167,7 @@ void IPUnix::get_local_interfaces(HashMap<String, Interface_Info> *r_interfaces)
 	if (ifAddrStruct != nullptr) {
 		freeifaddrs(ifAddrStruct);
 	}
+#endif // HORIZON_ENABLED
 }
 
 void IPUnix::make_default() {

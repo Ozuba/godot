@@ -28,6 +28,14 @@
 
 #include "manifold/common.h"
 
+// -- GODOT start --
+// newlib's <ctype.h> defines _S as a character class mask, which collides
+// with the _S local variables used below.
+#ifdef _S
+#undef _S
+#endif
+// -- GODOT end --
+
 namespace {
 using manifold::mat3;
 using manifold::vec3;

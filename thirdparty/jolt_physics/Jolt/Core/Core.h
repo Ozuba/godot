@@ -81,6 +81,10 @@
 	#define JPH_PLATFORM_WINDOWS
 #elif defined(__ANDROID__) // Android is linux too, so that's why we check it first
 	#define JPH_PLATFORM_ANDROID
+// -- GODOT start --
+#elif defined(__SWITCH__)
+	#define JPH_PLATFORM_HORIZON
+// -- GODOT end --
 #elif defined(__linux__)
 	#define JPH_PLATFORM_LINUX
 #elif defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
@@ -411,6 +415,10 @@
 	#endif
 #elif defined(JPH_PLATFORM_WASM)
 	#define JPH_BREAKPOINT		do { } while (false) // Not supported
+// -- GODOT start --
+#elif defined(JPH_PLATFORM_HORIZON)
+	#define JPH_BREAKPOINT		__builtin_trap()
+// -- GODOT end --
 #else
 	#error Unknown platform
 #endif

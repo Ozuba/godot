@@ -30,7 +30,7 @@
 
 #pragma once
 
-#if defined(UNIX_ENABLED)
+#if defined(UNIX_ENABLED) || defined(HORIZON_ENABLED)
 
 #include "core/io/file_access.h"
 

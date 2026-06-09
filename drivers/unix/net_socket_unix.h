@@ -30,12 +30,21 @@
 
 #pragma once
 
-#if defined(UNIX_ENABLED) && !defined(UNIX_SOCKET_UNAVAILABLE)
+#if (defined(UNIX_ENABLED) || defined(HORIZON_ENABLED)) && !defined(UNIX_SOCKET_UNAVAILABLE)
 
 #include "core/io/net_socket.h"
 
 #include <sys/socket.h>
+#ifdef HORIZON_ENABLED
+// Horizon has no unix domain sockets; provide the sockaddr type so this
+// class compiles. Socket calls using it will fail with EAFNOSUPPORT.
+struct sockaddr_un {
+	sa_family_t sun_family;
+	char sun_path[108];
+};
+#else
 #include <sys/un.h>
+#endif
 
 class NetSocketUnix : public NetSocket {
 	GDSOFTCLASS(NetSocketUnix, NetSocket);

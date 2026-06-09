@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  enet_godot.h                                                          */
+/*  audio_driver_switch.h                                                 */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -28,54 +28,54 @@
 /* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
 /**************************************************************************/
 
-/**
- @file  enet_godot.h
- @brief ENet Godot header
-*/
+#pragma once
 
-#ifndef __ENET_GODOT_H__
-#define __ENET_GODOT_H__
+#include "switch_wrapper.h"
 
-#ifdef WINDOWS_ENABLED
-#include <stdint.h>
-#include <winsock2.h>
-#endif
-#if defined(UNIX_ENABLED) || defined(HORIZON_ENABLED)
-#include <arpa/inet.h>
-#endif
+#include "core/os/mutex.h"
+#include "core/os/thread.h"
+#include "core/templates/safe_refcount.h"
+#include "servers/audio/audio_server.h"
 
-#ifdef MSG_MAXIOVLEN
-#define ENET_BUFFER_MAXIMUM MSG_MAXIOVLEN
-#endif
+class AudioDriverSwitch : public AudioDriver {
+	Thread thread;
+	Mutex mutex;
 
-typedef void *ENetSocket;
+	LibnxAudioDriver audren_driver;
+	AudioDriverWaveBuf audren_buffers[2];
+	size_t audren_pool_size = 0;
+	void *audren_pool_ptr = nullptr;
+	unsigned int audren_buffer_size = 0;
+	unsigned int buffer_frames = 0;
 
-#define ENET_SOCKET_NULL NULL
+	Vector<int32_t> samples_in;
+	Vector<int16_t> samples_out;
 
-#define ENET_HOST_TO_NET_16(value) (htons(value)) /**< macro that converts host to net byte-order of a 16-bit value */
-#define ENET_HOST_TO_NET_32(value) (htonl(value)) /**< macro that converts host to net byte-order of a 32-bit value */
+	Error init_device();
 
-#define ENET_NET_TO_HOST_16(value) (ntohs(value)) /**< macro that converts net to host byte-order of a 16-bit value */
-#define ENET_NET_TO_HOST_32(value) (ntohl(value)) /**< macro that converts net to host byte-order of a 32-bit value */
+	static void thread_func(void *p_udata);
 
-typedef struct
-{
-	void *data;
-	size_t dataLength;
-} ENetBuffer;
+	int mix_rate = 0;
+	SpeakerMode speaker_mode = SPEAKER_MODE_STEREO;
+	int channels = 2;
 
-#define ENET_CALLBACK
+	SafeFlag active;
+	SafeFlag exit_thread;
 
-#define ENET_API extern
+public:
+	virtual const char *get_name() const override {
+		return "AudRen";
+	}
 
-typedef void ENetSocketSet;
+	virtual Error init() override;
+	virtual void start() override;
+	virtual int get_mix_rate() const override;
+	virtual SpeakerMode get_speaker_mode() const override;
 
-typedef struct _ENetAddress
-{
-   uint8_t host[16];
-   uint16_t port;
-   uint8_t wildcard;
-} ENetAddress;
-#define enet_host_equal(host_a, host_b) (memcmp(&host_a, &host_b,16) == 0)
+	virtual void lock() override;
+	virtual void unlock() override;
+	virtual void finish() override;
 
-#endif /* __ENET_GODOT_H__ */
+	AudioDriverSwitch();
+	~AudioDriverSwitch() {}
+};

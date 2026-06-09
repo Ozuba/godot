@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  enet_godot.h                                                          */
+/*  godot_switch.cpp                                                      */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -28,54 +28,76 @@
 /* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
 /**************************************************************************/
 
-/**
- @file  enet_godot.h
- @brief ENet Godot header
-*/
+#include "os_switch.h"
+#include "switch_wrapper.h"
 
-#ifndef __ENET_GODOT_H__
-#define __ENET_GODOT_H__
+#include "main/main.h"
 
-#ifdef WINDOWS_ENABLED
-#include <stdint.h>
-#include <winsock2.h>
+#include <climits>
+#include <clocale>
+#include <cstdlib>
+#include <unistd.h>
+
+int main(int argc, char *argv[]) {
+	socketInitializeDefault();
+#ifdef NXLINK_STDIO_ENABLED
+	nxlinkStdio();
 #endif
-#if defined(UNIX_ENABLED) || defined(HORIZON_ENABLED)
-#include <arpa/inet.h>
-#endif
+	romfsInit();
 
-#ifdef MSG_MAXIOVLEN
-#define ENET_BUFFER_MAXIMUM MSG_MAXIOVLEN
-#endif
+	OS_Switch os;
+	if (argc > 0) {
+		os.set_executable_path(argv[0]);
+	}
 
-typedef void *ENetSocket;
+	setlocale(LC_CTYPE, "");
 
-#define ENET_SOCKET_NULL NULL
+	// Force the GL compatibility renderer unless the user passed an explicit
+	// choice; the Switch port only registers the opengl3 driver.
+	List<String> args;
+	bool has_rendering_method = false;
+	for (int i = 1; i < argc; i++) {
+		if (strcmp(argv[i], "--rendering-method") == 0) {
+			has_rendering_method = true;
+		}
+		args.push_back(String::utf8(argv[i]));
+	}
+	if (!has_rendering_method) {
+		args.push_back("--rendering-method");
+		args.push_back("gl_compatibility");
+	}
 
-#define ENET_HOST_TO_NET_16(value) (htons(value)) /**< macro that converts host to net byte-order of a 16-bit value */
-#define ENET_HOST_TO_NET_32(value) (htonl(value)) /**< macro that converts host to net byte-order of a 32-bit value */
+	int final_argc = args.size();
+	char **final_argv = (char **)malloc(sizeof(char *) * final_argc);
+	int i = 0;
+	for (const String &arg : args) {
+		final_argv[i++] = strdup(arg.utf8().get_data());
+	}
 
-#define ENET_NET_TO_HOST_16(value) (ntohs(value)) /**< macro that converts net to host byte-order of a 16-bit value */
-#define ENET_NET_TO_HOST_32(value) (ntohl(value)) /**< macro that converts net to host byte-order of a 32-bit value */
+	Error err = Main::setup(argv[0], final_argc, final_argv);
 
-typedef struct
-{
-	void *data;
-	size_t dataLength;
-} ENetBuffer;
+	if (err != OK) {
+		romfsExit();
+		socketExit();
+		if (err == ERR_HELP) {
+			return EXIT_SUCCESS;
+		}
+		return EXIT_FAILURE;
+	}
 
-#define ENET_CALLBACK
+	if (Main::start() == EXIT_SUCCESS) {
+		os.run();
+	} else {
+		os.set_exit_code(EXIT_FAILURE);
+	}
+	Main::cleanup();
 
-#define ENET_API extern
+	for (int j = 0; j < final_argc; j++) {
+		free(final_argv[j]);
+	}
+	free(final_argv);
 
-typedef void ENetSocketSet;
-
-typedef struct _ENetAddress
-{
-   uint8_t host[16];
-   uint16_t port;
-   uint8_t wildcard;
-} ENetAddress;
-#define enet_host_equal(host_a, host_b) (memcmp(&host_a, &host_b,16) == 0)
-
-#endif /* __ENET_GODOT_H__ */
+	romfsExit();
+	socketExit();
+	return os.get_exit_code();
+}

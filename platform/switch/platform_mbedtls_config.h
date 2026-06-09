@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  enet_godot.h                                                          */
+/*  platform_mbedtls_config.h                                             */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -28,54 +28,40 @@
 /* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
 /**************************************************************************/
 
-/**
- @file  enet_godot.h
- @brief ENet Godot header
-*/
+#pragma once
 
-#ifndef __ENET_GODOT_H__
-#define __ENET_GODOT_H__
+// mbedTLS configuration for the Horizon OS (Nintendo Switch homebrew).
+// Mirrors the defaults from godot_module_mbedtls_config.h, plus entropy
+// sourced from the system CSRNG since there is no /dev/urandom.
 
-#ifdef WINDOWS_ENABLED
-#include <stdint.h>
-#include <winsock2.h>
+#include <mbedtls/mbedtls_config.h>
+
+// Disable weak cryptography.
+#undef MBEDTLS_KEY_EXCHANGE_DHE_PSK_ENABLED
+#undef MBEDTLS_KEY_EXCHANGE_DHE_RSA_ENABLED
+#undef MBEDTLS_DES_C
+#undef MBEDTLS_DHM_C
+
+#ifdef THREADS_ENABLED
+// In mbedTLS 3, the PSA subsystem has an implicit shared context, MBEDTLS_THREADING_C is required to make it thread safe.
+#define MBEDTLS_THREADING_C
+#define MBEDTLS_THREADING_ALT
+#define GODOT_MBEDTLS_THREADING_ALT
 #endif
-#if defined(UNIX_ENABLED) || defined(HORIZON_ENABLED)
-#include <arpa/inet.h>
-#endif
 
-#ifdef MSG_MAXIOVLEN
-#define ENET_BUFFER_MAXIMUM MSG_MAXIOVLEN
-#endif
+// ARMv8 hardware AES operations; runtime detection is not possible on Horizon.
+#undef MBEDTLS_AESCE_C
 
-typedef void *ENetSocket;
+// No POSIX entropy sources; use the hardware poll backed by randomGet().
+#define MBEDTLS_NO_PLATFORM_ENTROPY
+#define MBEDTLS_ENTROPY_HARDWARE_ALT
 
-#define ENET_SOCKET_NULL NULL
+// Godot uses its own sockets; mbedTLS's BSD socket layer does not build on Horizon.
+#undef MBEDTLS_NET_C
 
-#define ENET_HOST_TO_NET_16(value) (htons(value)) /**< macro that converts host to net byte-order of a 16-bit value */
-#define ENET_HOST_TO_NET_32(value) (htonl(value)) /**< macro that converts host to net byte-order of a 32-bit value */
+// newlib does not advertise _POSIX_VERSION; provide mbedtls_ms_time() ourselves.
+#define MBEDTLS_PLATFORM_MS_TIME_ALT
 
-#define ENET_NET_TO_HOST_16(value) (ntohs(value)) /**< macro that converts net to host byte-order of a 16-bit value */
-#define ENET_NET_TO_HOST_32(value) (ntohl(value)) /**< macro that converts net to host byte-order of a 32-bit value */
 
-typedef struct
-{
-	void *data;
-	size_t dataLength;
-} ENetBuffer;
-
-#define ENET_CALLBACK
-
-#define ENET_API extern
-
-typedef void ENetSocketSet;
-
-typedef struct _ENetAddress
-{
-   uint8_t host[16];
-   uint16_t port;
-   uint8_t wildcard;
-} ENetAddress;
-#define enet_host_equal(host_a, host_b) (memcmp(&host_a, &host_b,16) == 0)
-
-#endif /* __ENET_GODOT_H__ */
+// Disable deprecated
+#define MBEDTLS_DEPRECATED_REMOVED

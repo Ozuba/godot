@@ -1,0 +1,44 @@
+#!/usr/bin/env python
+from misc.utility.scons_hints import *
+
+import os
+
+Import("env")
+
+import version
+
+switch_lib = [
+    "godot_switch.cpp",
+    "os_switch.cpp",
+    "display_server_switch.cpp",
+    "audio_driver_switch.cpp",
+    "joypad_switch.cpp",
+    "entropy_switch.cpp",
+]
+
+prog = env.add_program("#bin/godot", switch_lib)
+
+dkp = os.environ["DEVKITPRO"]
+nacptool = os.path.join(dkp, "tools", "bin", "nacptool")
+elf2nro = os.path.join(dkp, "tools", "bin", "elf2nro")
+
+version_str = "{}.{}.{}".format(version.major, version.minor, version.patch)
+
+nacp = env.Command(
+    "#bin/godot" + env["PROGSUFFIX"] + ".nacp",
+    None,
+    nacptool + " --create 'Godot Engine' 'Godot Engine contributors' " + version_str + " $TARGET",
+)
+
+nro_cmd = elf2nro + " $SOURCE $TARGET --nacp=" + nacp[0].abspath
+icon_path = os.path.join(env.Dir(".").srcnode().abspath, "icon.jpg")
+if os.path.exists(icon_path):
+    nro_cmd += " --icon=" + icon_path
+
+nro = env.Command(
+    "#bin/godot" + env["PROGSUFFIX"] + ".nro",
+    prog,
+    nro_cmd,
+)
+env.Depends(nro, nacp)
+env.Default(nro)

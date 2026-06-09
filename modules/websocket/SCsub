@@ -30,6 +30,9 @@ elif env["builtin_wslay"]:
         env_ws.Append(CPPDEFINES=["HAVE_WINSOCK2_H"])
     else:
         env_ws.Append(CPPDEFINES=["HAVE_NETINET_IN_H"])
+        if env["platform"] == "switch":
+            # libnx declares ntohl()/htonl() in arpa/inet.h.
+            env_ws.Append(CPPDEFINES=["HAVE_ARPA_INET_H"])
 
     env_thirdparty = env_ws.Clone()
     env_thirdparty.disable_warnings()

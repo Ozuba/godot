@@ -30,7 +30,7 @@
 
 #pragma once
 
-#if defined(UNIX_ENABLED) && !defined(UNIX_SOCKET_UNAVAILABLE)
+#if (defined(UNIX_ENABLED) || defined(HORIZON_ENABLED)) && !defined(UNIX_SOCKET_UNAVAILABLE)
 
 #include "core/io/ip.h"
 
