@@ -62,6 +62,11 @@ def get_flags():
         "module_upnp_enabled": False,
         # No camera or MIDI access.
         "module_camera_enabled": False,
+        # Enable OVERRIDE_PATH_ENABLED even in export templates so the entry
+        # point can pass `--main-pack romfs:/game.pck` for fused single-file
+        # .nro builds. Without this, --main-pack aborts Main::setup with
+        # ERR_INVALID_PARAMETER (homebrew has no other way to point at the pack).
+        "disable_path_overrides": False,
         "supported": [],
     }
 

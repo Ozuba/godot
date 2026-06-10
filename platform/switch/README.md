@@ -32,7 +32,58 @@ Options:
 - `nxlink_stdio=yes|no` (default yes) — redirect stdout/stderr to the nxlink
   host. Build templates with `nxlink_stdio=no` for release distribution.
 
-## Running a project
+## Exporting from the editor
+
+The editor integration ships as a **GDScript addon**, not as compiled-in editor
+code — so it works in a **stock, official Godot editor** (4.3+, which is when
+`EditorExportPlatformExtension` was added). There is no need to build a custom
+editor. See [`addons/switch_export/`](../../../addons/switch_export/) at the repo
+root and its README for the addon itself.
+
+To export, you need three things:
+
+1. **The addon**, copied into your project's `res://addons/switch_export/` and
+   enabled in **Project → Project Settings → Plugins**. It then adds "Switch" to
+   **Project → Export → Add…**.
+
+2. **Export templates** — the `.nro` built from this fork. These *must* be built
+   from this fork (mainline Godot has no Switch engine); a stock editor cannot
+   supply them. Build and install them under the editor's export-templates
+   directory with the names the addon looks for:
+
+   ```sh
+   scons platform=switch target=template_debug nxlink_stdio=yes
+   scons platform=switch target=template_release nxlink_stdio=no
+   # then, e.g. on Linux:
+   cp bin/godot.switch.template_debug.arm64.nro   ~/.local/share/godot/export_templates/<version>/switch_nro_debug.nro
+   cp bin/godot.switch.template_release.arm64.nro ~/.local/share/godot/export_templates/<version>/switch_nro_release.nro
+   ```
+
+   Or just point **Custom Template → Debug/Release** in the export preset
+   directly at the built `.nro` files.
+
+3. **devkitPro tools.** The addon shells out to `build_romfs` to pack the game
+   and to `nxlink` to deploy. With `DEVKITPRO` set, both default to
+   `$DEVKITPRO/tools/bin/...`; override in **Editor Settings → Export → Switch**.
+
+Export produces a **single self-contained `.nro`** with the game `.pck` embedded
+in the NRO RomFS (loaded at boot as `romfs:/game.pck`). Just copy it to the SD
+card and launch it from hbmenu — no separate `.pck` required.
+
+> **Note:** loading `romfs:/game.pck` requires the engine change in
+> `godot_switch.cpp`, so the **export templates must be built from a tree that
+> includes it**. The addon (which runs in any editor) and the templates (which
+> must be this fork) are versioned independently — only the templates carry the
+> engine behavior.
+
+### One-click deploy
+
+Put the Switch on the **hbmenu netloader** screen (so it listens for nxlink). It
+then shows up in the export dialog's device dropdown; pressing the run/deploy
+button builds a fused `.nro` and netloads it over `nxlink`, forwarding the
+editor's remote-debug flags so the debugger can attach.
+
+## Running a project manually
 
 The port only registers the `opengl3` rendering driver and forces
 `--rendering-method gl_compatibility` unless one is passed explicitly, so
@@ -82,6 +133,4 @@ User data (`user://`) is stored under `sdmc:/switch/godot/app_userdata/<name>`.
 - Software keyboard (swkbd) is not wired up yet (`virtual_keyboard_show`).
 - Docked/handheld mode switches do not resize the window at runtime yet
   (the EGL surface size is fixed at startup).
-- No editor/export-template integration in the editor UI; export by renaming
-  the template `.nro` and shipping a `.pck` alongside it.
 - Vulkan/NVK rendering driver pending upstream Mesa support.

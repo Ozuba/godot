@@ -118,15 +118,31 @@ int main(int argc, char *argv[]) {
 	// choice; the Switch port only registers the opengl3 driver.
 	List<String> args;
 	bool has_rendering_method = false;
+	bool has_main_pack = false;
 	for (int i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "--rendering-method") == 0) {
 			has_rendering_method = true;
+		}
+		if (strcmp(argv[i], "--main-pack") == 0) {
+			has_main_pack = true;
 		}
 		args.push_back(String::utf8(argv[i]));
 	}
 	if (!has_rendering_method) {
 		args.push_back("--rendering-method");
 		args.push_back("gl_compatibility");
+	}
+
+	// Fused build: the editor's Switch exporter embeds the game pack in the
+	// NRO's RomFS as romfs:/game.pck. When RomFS mounted and no pack was given
+	// explicitly, load it so a single self-contained .nro just works.
+	if (R_SUCCEEDED(romfs_res) && !has_main_pack) {
+		FILE *pack = fopen("romfs:/game.pck", "rb");
+		if (pack) {
+			fclose(pack);
+			args.push_back("--main-pack");
+			args.push_back("romfs:/game.pck");
+		}
 	}
 
 	// The game pack is expected next to the executable with the same
