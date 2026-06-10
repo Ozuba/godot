@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  platform_config.h                                                     */
+/*  switch_logger.cpp                                                     */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -28,10 +28,53 @@
 /* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
 /**************************************************************************/
 
-#include <alloca.h>
+#include "switch_logger.h"
 
-#define GODOT_MBEDTLS_INCLUDE_H "platform_mbedtls_config.h"
+#include "switch_wrapper.h"
 
-// Use the pthread-based Thread in platform/switch/platform_thread.h; libnx
-// threads otherwise default to 128 KiB stacks, far too small for the engine.
-#define PLATFORM_THREAD_OVERRIDE
+#include <cstdarg>
+
+static FILE *log_file = nullptr;
+static char log_buffer[64 * 1024];
+
+FILE *switch_log_get_file() {
+	if (!log_file) {
+		log_file = fopen("sdmc:/godot_boot.log", "w");
+		if (log_file) {
+			setvbuf(log_file, log_buffer, _IOFBF, sizeof(log_buffer));
+		}
+	}
+	return log_file;
+}
+
+void switch_log_flush() {
+	if (log_file) {
+		fflush(log_file);
+	}
+}
+
+void SwitchLogger::logv(const char *p_format, va_list p_list, bool p_err) {
+	if (!should_log(p_err)) {
+		return;
+	}
+
+	FILE *file = switch_log_get_file();
+	if (file) {
+		va_list list_copy;
+		va_copy(list_copy, p_list);
+		vfprintf(file, p_format, list_copy);
+		va_end(list_copy);
+
+		if (p_err || _flush_stdout_on_print) {
+			fflush(file);
+		}
+	}
+
+#ifdef DEBUG_ENABLED
+	char line[2048];
+	int len = vsnprintf(line, sizeof(line), p_format, p_list);
+	if (len > 0) {
+		svcOutputDebugString(line, (size_t)len < sizeof(line) ? (size_t)len : sizeof(line) - 1);
+	}
+#endif
+}

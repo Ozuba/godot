@@ -30,11 +30,7 @@ def can_build():
 
 
 def get_opts():
-    from SCons.Variables import BoolVariable
-
-    return [
-        BoolVariable("nxlink_stdio", "Redirect stdout/stderr over nxlink for debugging", True),
-    ]
+    return []
 
 
 def get_doc_classes():
@@ -126,9 +122,6 @@ def configure(env: "SConsEnvironment"):
             os.path.join(dkp, "libnx", "lib"),
         ]
     )
-
-    if env["nxlink_stdio"]:
-        env.Append(CPPDEFINES=["NXLINK_STDIO_ENABLED"])
 
     if env["opengl3"]:
         env.Append(CPPDEFINES=["GLES3_ENABLED"])

@@ -29,6 +29,7 @@
 /**************************************************************************/
 
 #include "os_switch.h"
+#include "switch_logger.h"
 #include "switch_wrapper.h"
 
 #include "main/main.h"
@@ -42,14 +43,13 @@
 #include <unistd.h>
 
 // Show a message through the system error applet, so startup failures are
-// visible on screen even without an nxlink stdio connection. The tail of the
-// boot log is appended so the actual engine error is readable on screen.
+// visible on screen. The tail of the boot log is appended so the actual
+// engine error is readable on screen.
 static void show_error_applet(const char *p_message) {
 	char details[1900];
 	int written = snprintf(details, sizeof(details), "%s\n--- log tail ---\n", p_message);
 
-	fflush(stdout);
-	fflush(stderr);
+	switch_log_flush();
 	FILE *log = fopen("sdmc:/godot_boot.log", "rb");
 	if (log && written > 0 && (size_t)written < sizeof(details) - 1) {
 		fseek(log, 0, SEEK_END);
@@ -69,34 +69,25 @@ static void show_error_applet(const char *p_message) {
 	errorSystemShow(&config);
 }
 
-static int nxlink_socket = -1;
-static FILE *boot_log = nullptr;
-
-// Tee stdout/stderr to the nxlink host (when reachable) and to a boot log on
-// the SD card, so engine output is never lost.
-static ssize_t tee_write(struct _reent *r, void *fd, const char *ptr, size_t len) {
-	if (nxlink_socket >= 0) {
-		write(nxlink_socket, ptr, len);
-	}
-	if (boot_log) {
-		fwrite(ptr, 1, len, boot_log);
-		fflush(boot_log);
+// Route raw stdout/stderr (entry-point prints, thirdparty libraries) into the
+// shared buffered boot log. Engine output goes there directly through
+// SwitchLogger; neither path syncs the SD card per write.
+static ssize_t log_write(struct _reent *r, void *fd, const char *ptr, size_t len) {
+	FILE *log = switch_log_get_file();
+	if (log) {
+		fwrite(ptr, 1, len, log);
 	}
 	return len;
 }
 
-static const devoptab_t tee_devoptab = {
-	.name = "tee",
-	.write_r = tee_write,
+static const devoptab_t log_devoptab = {
+	.name = "log",
+	.write_r = log_write,
 };
 
 static void setup_stdio() {
-	boot_log = fopen("sdmc:/godot_boot.log", "w");
-#ifdef NXLINK_STDIO_ENABLED
-	nxlink_socket = nxlinkConnectToHost(false, false);
-#endif
-	devoptab_list[STD_OUT] = &tee_devoptab;
-	devoptab_list[STD_ERR] = &tee_devoptab;
+	devoptab_list[STD_OUT] = &log_devoptab;
+	devoptab_list[STD_ERR] = &log_devoptab;
 	setvbuf(stdout, nullptr, _IONBF, 0);
 	setvbuf(stderr, nullptr, _IONBF, 0);
 }
@@ -192,5 +183,6 @@ int main(int argc, char *argv[]) {
 
 	romfsExit();
 	socketExit();
+	switch_log_flush();
 	return os.get_exit_code();
 }

@@ -28,6 +28,7 @@
 /* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
 /**************************************************************************/
 
+#include "switch_logger.h"
 #include "switch_wrapper.h"
 
 #include <cstdio>
@@ -44,6 +45,10 @@ alignas(16) u8 __nx_exception_stack[0x8000];
 u64 __nx_exception_stack_size = sizeof(__nx_exception_stack);
 
 void __libnx_exception_handler(ThreadExceptionDump *ctx) {
+	// Get the buffered boot log onto the SD card before anything else; the
+	// final lines before the fault are usually the interesting ones.
+	switch_log_flush();
+
 	FILE *f = fopen("sdmc:/godot_crash.log", "w");
 	if (!f) {
 		return;

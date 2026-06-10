@@ -31,6 +31,7 @@
 #include "os_switch.h"
 
 #include "display_server_switch.h"
+#include "switch_logger.h"
 #include "switch_wrapper.h"
 
 #include "core/config/project_settings.h"
@@ -299,6 +300,13 @@ void OS_Switch::run() {
 }
 
 OS_Switch::OS_Switch() {
+	// Replace the default StdLogger: with no console attached, formatting
+	// engine output into stdout is pure waste. SwitchLogger writes to the
+	// buffered boot log on the SD card instead.
+	Vector<Logger *> loggers;
+	loggers.push_back(memnew(SwitchLogger));
+	_set_logger(memnew(CompositeLogger(loggers)));
+
 	AudioDriverManager::add_driver(&audio_driver);
 	DisplayServerSwitch::register_switch_driver();
 }

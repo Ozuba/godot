@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  platform_config.h                                                     */
+/*  switch_logger.h                                                       */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -28,10 +28,24 @@
 /* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
 /**************************************************************************/
 
-#include <alloca.h>
+#pragma once
 
-#define GODOT_MBEDTLS_INCLUDE_H "platform_mbedtls_config.h"
+#include "core/io/logger.h"
 
-// Use the pthread-based Thread in platform/switch/platform_thread.h; libnx
-// threads otherwise default to 128 KiB stacks, far too small for the engine.
-#define PLATFORM_THREAD_OVERRIDE
+#include <cstdio>
+
+// The boot log on the SD card (sdmc:/godot_boot.log), shared between the
+// engine logger and the raw stdout/stderr devoptab in godot_switch.cpp.
+// Fully buffered; writes hit the SD card only on flush, so logging stays
+// cheap during gameplay.
+FILE *switch_log_get_file();
+void switch_log_flush();
+
+// Writes engine output to the boot log, flushing only on errors (or always
+// when flush-on-print is enabled, e.g. --verbose). Debug builds also mirror
+// messages to the kernel debug log (svcOutputDebugString), which is visible
+// in emulators and to an attached debugger at near-zero cost otherwise.
+class SwitchLogger : public Logger {
+public:
+	virtual void logv(const char *p_format, va_list p_list, bool p_err) override _PRINTF_FORMAT_ATTRIBUTE_2_0;
+};

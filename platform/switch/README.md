@@ -24,13 +24,15 @@ scons platform=switch target=template_release
 
 Outputs in `bin/`:
 
-- `godot.switch.<target>.arm64` — the ELF (useful for `nxlink -s` debugging).
+- `godot.switch.<target>.arm64` — the ELF (useful for symbolizing crash logs).
 - `godot.switch.<target>.arm64.nro` — the homebrew executable.
 
-Options:
-
-- `nxlink_stdio=yes|no` (default yes) — redirect stdout/stderr to the nxlink
-  host. Build templates with `nxlink_stdio=no` for release distribution.
+Engine output is written to a buffered log at `sdmc:/godot_boot.log` (fetch it
+with an FTP homebrew, e.g. ftpd). Errors flush immediately; run with
+`--verbose` to flush every line. On a crash, `sdmc:/godot_crash.log` gets
+registers and a backtrace, and the boot log is flushed first. Debug builds
+also mirror engine output to the kernel debug log (`svcOutputDebugString`),
+visible in emulators and debuggers.
 
 ## Exporting from the editor
 
@@ -52,8 +54,8 @@ To export, you need three things:
    directory with the names the addon looks for:
 
    ```sh
-   scons platform=switch target=template_debug nxlink_stdio=yes
-   scons platform=switch target=template_release nxlink_stdio=no
+   scons platform=switch target=template_debug
+   scons platform=switch target=template_release
    # then, e.g. on Linux:
    cp bin/godot.switch.template_debug.arm64.nro   ~/.local/share/godot/export_templates/<version>/switch_nro_debug.nro
    cp bin/godot.switch.template_release.arm64.nro ~/.local/share/godot/export_templates/<version>/switch_nro_release.nro
@@ -102,7 +104,7 @@ Launch via hbmenu, passing the pack with the usual Godot arguments in the
 `.nro` hbmenu config, or run over nxlink during development:
 
 ```sh
-nxlink -s bin/godot.switch.template_debug.arm64.nro --args --main-pack sdmc:/switch/mygame/game.pck
+nxlink bin/godot.switch.template_debug.arm64.nro --args --main-pack sdmc:/switch/mygame/game.pck
 ```
 
 User data (`user://`) is stored under `sdmc:/switch/godot/app_userdata/<name>`.

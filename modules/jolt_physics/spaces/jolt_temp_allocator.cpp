@@ -66,6 +66,13 @@ constexpr TValue align_up(TValue p_value, TAlignment p_alignment) {
 JoltTempAllocator::JoltTempAllocator() :
 		capacity((uint64_t)JoltProjectSettings::temp_memory_b),
 		base(static_cast<uint8_t *>(JPH::Allocate((size_t)capacity))) {
+	if (unlikely(base == nullptr)) {
+		ERR_PRINT(vformat("Jolt Physics failed to allocate its temporary memory buffer of %d MiB. "
+						  "Falling back to slower general-purpose allocator for all temporary allocations. "
+						  "Consider decreasing maximum temporary memory in project settings.",
+				JoltProjectSettings::temp_memory_mib));
+		capacity = 0;
+	}
 }
 
 JoltTempAllocator::~JoltTempAllocator() {
@@ -86,12 +93,17 @@ void *JoltTempAllocator::Allocate(uint32_t p_size) {
 	if (new_top <= capacity) {
 		ptr = base + top;
 	} else {
-		WARN_PRINT_ONCE(vformat("Jolt Physics temporary memory allocator exceeded capacity of %d MiB. "
-								"Falling back to slower general-purpose allocator. "
-								"Consider increasing maximum temporary memory in project settings.",
-				JoltProjectSettings::temp_memory_mib));
+		if (likely(base != nullptr)) {
+			WARN_PRINT_ONCE(vformat("Jolt Physics temporary memory allocator exceeded capacity of %d MiB. "
+									"Falling back to slower general-purpose allocator. "
+									"Consider increasing maximum temporary memory in project settings.",
+					JoltProjectSettings::temp_memory_mib));
+		}
 
 		ptr = JPH::Allocate(p_size);
+		CRASH_COND_MSG(ptr == nullptr, vformat("Jolt Physics ran out of memory while allocating %d bytes of temporary memory (%d MiB already in use). "
+											   "Consider decreasing limits such as maximum contact constraints in project settings.",
+				(uint64_t)p_size, top / (1024 * 1024)));
 	}
 
 	top = new_top;
