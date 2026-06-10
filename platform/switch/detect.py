@@ -53,8 +53,9 @@ def get_flags():
         "opengl3": True,
         "sdl": False,
         "accesskit": False,
-        # No JIT on Horizon (no executable memory mapping for homebrew).
-        "builtin_pcre2_with_jit": False,
+        # PCRE2 JIT works through libnx jitCreate() (CodeMemory backend);
+        # it degrades gracefully to the interpreter when unavailable.
+        "builtin_pcre2_with_jit": True,
         # Embree is heavy and not ported to Horizon.
         "module_raycast_enabled": False,
         # miniupnpc requires getifaddrs() and other APIs missing from newlib.

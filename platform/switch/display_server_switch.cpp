@@ -78,8 +78,50 @@ bool DisplayServerSwitch::has_feature(DisplayServerEnums::Feature p_feature) con
 		case DisplayServerEnums::FEATURE_TOUCHSCREEN:
 		case DisplayServerEnums::FEATURE_SWAP_BUFFERS:
 			return true;
+		case DisplayServerEnums::FEATURE_VIRTUAL_KEYBOARD:
+			return swkbd_created;
 		default:
 			return false;
+	}
+}
+
+void DisplayServerSwitch::_applet_hook(AppletHookType p_hook, void *p_param) {
+	DisplayServerSwitch *ds = static_cast<DisplayServerSwitch *>(p_param);
+	if (p_hook == AppletHookType_OnOperationMode || p_hook == AppletHookType_OnResume) {
+		ds->operation_mode_dirty = true;
+	}
+}
+
+void DisplayServerSwitch::_update_operation_mode() {
+	operation_mode_dirty = false;
+
+	const bool docked = appletGetOperationMode() == AppletOperationMode_Console;
+	const Size2i new_size = docked ? Size2i(1920, 1080) : Size2i(1280, 720);
+	if (egl_display == EGL_NO_DISPLAY || window_get_size() == new_size) {
+		return;
+	}
+
+	// The EGL surface is tied to the native window dimensions, so it has to
+	// be recreated when switching between handheld and docked mode.
+	eglMakeCurrent(egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+	if (egl_surface != EGL_NO_SURFACE) {
+		eglDestroySurface(egl_display, egl_surface);
+		egl_surface = EGL_NO_SURFACE;
+	}
+
+	NWindow *win = nwindowGetDefault();
+	nwindowSetDimensions(win, new_size.width, new_size.height);
+
+	egl_surface = eglCreateWindowSurface(egl_display, egl_config, (EGLNativeWindowType)win, nullptr);
+	if (egl_surface == EGL_NO_SURFACE) {
+		ERR_PRINT(vformat("Failed to recreate EGL surface after mode switch. Error: %d", eglGetError()));
+		return;
+	}
+	eglMakeCurrent(egl_display, egl_surface, egl_surface, egl_context);
+	eglSwapInterval(egl_display, vsync_mode == DisplayServerEnums::VSYNC_DISABLED ? 0 : 1);
+
+	if (rect_changed_callback.is_valid()) {
+		rect_changed_callback.call(Rect2i(Point2i(), new_size));
 	}
 }
 
@@ -192,7 +234,150 @@ void DisplayServerSwitch::_process_touch() {
 	last_touch_count = touch_count;
 }
 
+// The inline software keyboard reports text changes as diffs against the
+// previous string; translate them to key events for Godot's controls.
+void DisplayServerSwitch::_send_key(Key p_key, char32_t p_unicode) {
+	for (int pressed = 1; pressed >= 0; pressed--) {
+		Ref<InputEventKey> ev;
+		ev.instantiate();
+		ev->set_echo(false);
+		ev->set_pressed(pressed);
+		ev->set_keycode(p_key);
+		ev->set_physical_keycode(p_key);
+		ev->set_key_label(p_key);
+		ev->set_unicode(p_unicode);
+		Input::get_singleton()->parse_input_event(ev);
+	}
+}
+
+void DisplayServerSwitch::_swkbd_string_changed(const char *p_str, SwkbdChangedStringArg *p_arg) {
+	DisplayServerSwitch *ds = static_cast<DisplayServerSwitch *>(get_singleton());
+
+	// A string-changed event fires on appear and when the text is set
+	// programmatically; those must not produce key events.
+	if (ds->swkbd_eat_string_events > 0) {
+		ds->swkbd_eat_string_events--;
+		ds->swkbd_last_len = p_arg->stringLen;
+		return;
+	}
+
+	if (p_arg->stringLen < ds->swkbd_last_len) {
+		ds->_send_key(Key::BACKSPACE, 0);
+	} else if (p_arg->stringLen > 0) {
+		String text = String::utf8(p_str);
+		if (text.length() > 0) {
+			char32_t c = text[MIN((int)p_arg->stringLen, text.length()) - 1];
+			ds->_send_key(Key::NONE, c);
+		}
+	}
+	ds->swkbd_last_len = p_arg->stringLen;
+}
+
+void DisplayServerSwitch::_swkbd_moved_cursor(const char *p_str, SwkbdMovedCursorArg *p_arg) {
+	DisplayServerSwitch *ds = static_cast<DisplayServerSwitch *>(get_singleton());
+	if (p_arg->cursorPos < ds->swkbd_last_cursor) {
+		ds->_send_key(Key::LEFT, 0);
+	} else {
+		ds->_send_key(Key::RIGHT, 0);
+	}
+	ds->swkbd_last_cursor = p_arg->cursorPos;
+}
+
+void DisplayServerSwitch::_swkbd_decided_enter(const char *p_str, SwkbdDecidedEnterArg *p_arg) {
+	DisplayServerSwitch *ds = static_cast<DisplayServerSwitch *>(get_singleton());
+	ds->_send_key(Key::ENTER, 0);
+	ds->swkbd_open = false;
+}
+
+void DisplayServerSwitch::_swkbd_decided_cancel() {
+	DisplayServerSwitch *ds = static_cast<DisplayServerSwitch *>(get_singleton());
+	ds->swkbd_open = false;
+}
+
+void DisplayServerSwitch::_initialize_swkbd() {
+	if (R_FAILED(swkbdInlineCreate(&inline_keyboard))) {
+		return;
+	}
+
+	Result res;
+	int applet_type = appletGetAppletType();
+	if (applet_type == AppletType_Application || applet_type == AppletType_SystemApplication) {
+		res = swkbdInlineLaunch(&inline_keyboard);
+	} else {
+		res = swkbdInlineLaunchForLibraryApplet(&inline_keyboard, SwkbdInlineMode_AppletDisplay, 0);
+	}
+	if (R_FAILED(res)) {
+		swkbdInlineClose(&inline_keyboard);
+		return;
+	}
+
+	swkbdInlineSetChangedStringCallback(&inline_keyboard, _swkbd_string_changed);
+	swkbdInlineSetMovedCursorCallback(&inline_keyboard, _swkbd_moved_cursor);
+	swkbdInlineSetDecidedEnterCallback(&inline_keyboard, _swkbd_decided_enter);
+	swkbdInlineSetDecidedCancelCallback(&inline_keyboard, _swkbd_decided_cancel);
+
+	swkbd_created = true;
+}
+
+void DisplayServerSwitch::virtual_keyboard_show(const String &p_existing_text, const Rect2 &p_screen_rect, DisplayServerEnums::VirtualKeyboardType p_type, int p_max_length, int p_cursor_start, int p_cursor_end) {
+	if (!swkbd_created || swkbd_open) {
+		return;
+	}
+
+	SwkbdType type = SwkbdType_Normal;
+	switch (p_type) {
+		case DisplayServerEnums::KEYBOARD_TYPE_NUMBER:
+		case DisplayServerEnums::KEYBOARD_TYPE_NUMBER_DECIMAL:
+		case DisplayServerEnums::KEYBOARD_TYPE_PHONE:
+			type = SwkbdType_NumPad;
+			break;
+		default:
+			type = SwkbdType_Normal;
+			break;
+	}
+
+	SwkbdAppearArg appear_arg;
+	swkbdInlineMakeAppearArg(&appear_arg, type);
+	if (p_max_length > 0) {
+		appear_arg.stringLenMax = p_max_length;
+	}
+
+	CharString existing = p_existing_text.utf8();
+	swkbdInlineSetInputText(&inline_keyboard, existing.get_data());
+	int cursor = p_cursor_start >= 0 ? p_cursor_start : p_existing_text.length();
+	swkbdInlineSetCursorPos(&inline_keyboard, cursor);
+	swkbd_last_cursor = cursor;
+
+	// Eat the appear + set-text string events.
+	swkbd_eat_string_events = 2;
+
+	swkbdInlineAppear(&inline_keyboard, &appear_arg);
+	swkbd_open = true;
+}
+
+void DisplayServerSwitch::virtual_keyboard_hide() {
+	if (!swkbd_created || !swkbd_open) {
+		return;
+	}
+	swkbdInlineDisappear(&inline_keyboard);
+	swkbd_open = false;
+}
+
+int DisplayServerSwitch::virtual_keyboard_get_height() const {
+	if (!swkbd_open) {
+		return 0;
+	}
+	// The inline keyboard covers roughly the bottom 40% of the screen.
+	return window_get_size().height * 2 / 5;
+}
+
 void DisplayServerSwitch::process_events() {
+	if (operation_mode_dirty) {
+		_update_operation_mode();
+	}
+	if (swkbd_created) {
+		swkbdInlineUpdate(&inline_keyboard, nullptr);
+	}
 	_process_touch();
 	OS_Switch::get_singleton()->process_joypads();
 	Input::get_singleton()->flush_buffered_events();
@@ -228,16 +413,23 @@ Error DisplayServerSwitch::_initialize_egl() {
 		EGL_NONE
 	};
 
-	EGLConfig config = nullptr;
 	EGLint num_configs = 0;
-	eglChooseConfig(egl_display, attribute_list, &config, 1, &num_configs);
+	eglChooseConfig(egl_display, attribute_list, &egl_config, 1, &num_configs);
 	if (num_configs == 0) {
 		ERR_PRINT(vformat("No EGL config found. Error: %d", eglGetError()));
 		_finalize_egl();
 		return ERR_UNAVAILABLE;
 	}
 
-	egl_surface = eglCreateWindowSurface(egl_display, config, (EGLNativeWindowType)nwindowGetDefault(), nullptr);
+	// Size the native window for the current operation mode up front.
+	NWindow *win = nwindowGetDefault();
+	if (appletGetOperationMode() == AppletOperationMode_Console) {
+		nwindowSetDimensions(win, 1920, 1080);
+	} else {
+		nwindowSetDimensions(win, 1280, 720);
+	}
+
+	egl_surface = eglCreateWindowSurface(egl_display, egl_config, (EGLNativeWindowType)win, nullptr);
 	if (egl_surface == EGL_NO_SURFACE) {
 		ERR_PRINT(vformat("EGL surface creation failed. Error: %d", eglGetError()));
 		_finalize_egl();
@@ -249,7 +441,7 @@ Error DisplayServerSwitch::_initialize_egl() {
 		EGL_NONE
 	};
 
-	egl_context = eglCreateContext(egl_display, config, EGL_NO_CONTEXT, context_attribute_list);
+	egl_context = eglCreateContext(egl_display, egl_config, EGL_NO_CONTEXT, context_attribute_list);
 	if (egl_context == EGL_NO_CONTEXT) {
 		ERR_PRINT(vformat("EGL context creation failed. Error: %d", eglGetError()));
 		_finalize_egl();
@@ -300,12 +492,23 @@ DisplayServerSwitch::DisplayServerSwitch(const String &p_rendering_driver, Displ
 
 	window_set_vsync_mode(p_vsync_mode);
 
+	appletHook(&applet_hook_cookie, _applet_hook, this);
+
+	_initialize_swkbd();
+
 	Input::get_singleton()->set_event_dispatch_function(_dispatch_input_events);
 
 	r_error = OK;
 }
 
 DisplayServerSwitch::~DisplayServerSwitch() {
+	if (swkbd_created) {
+		swkbdInlineClose(&inline_keyboard);
+		swkbd_created = false;
+	}
+
+	appletUnhook(&applet_hook_cookie);
+
 	if (native_menu) {
 		memdelete(native_menu);
 		native_menu = nullptr;

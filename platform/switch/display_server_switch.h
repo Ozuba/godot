@@ -55,14 +55,37 @@ class DisplayServerSwitch : public DisplayServer {
 
 	void _process_touch();
 
+	static void _applet_hook(AppletHookType p_hook, void *p_param);
+	void _update_operation_mode();
+
+	void _initialize_swkbd();
+	void _send_key(Key p_key, char32_t p_unicode);
+
+	static void _swkbd_string_changed(const char *p_str, SwkbdChangedStringArg *p_arg);
+	static void _swkbd_moved_cursor(const char *p_str, SwkbdMovedCursorArg *p_arg);
+	static void _swkbd_decided_enter(const char *p_str, SwkbdDecidedEnterArg *p_arg);
+	static void _swkbd_decided_cancel();
+
 	NativeMenu *native_menu = nullptr;
 	Callable input_event_callback;
+	Callable rect_changed_callback;
 
 	EGLDisplay egl_display = EGL_NO_DISPLAY;
 	EGLSurface egl_surface = EGL_NO_SURFACE;
 	EGLContext egl_context = EGL_NO_CONTEXT;
+	EGLConfig egl_config = nullptr;
 
 	DisplayServerEnums::VSyncMode vsync_mode = DisplayServerEnums::VSYNC_ENABLED;
+
+	AppletHookCookie applet_hook_cookie;
+	bool operation_mode_dirty = false;
+
+	SwkbdInline inline_keyboard;
+	bool swkbd_created = false;
+	bool swkbd_open = false;
+	int swkbd_eat_string_events = 0;
+	u32 swkbd_last_len = 0;
+	s32 swkbd_last_cursor = 0;
 
 	// Maximum of 16 touch points reported by HID.
 	int last_touch_count = 0;
@@ -99,7 +122,9 @@ public:
 	void window_attach_instance_id(ObjectID p_instance, DisplayServerEnums::WindowID p_window = DisplayServerEnums::MAIN_WINDOW_ID) override { window_attached_instance_id = p_instance; }
 	ObjectID window_get_attached_instance_id(DisplayServerEnums::WindowID p_window = DisplayServerEnums::MAIN_WINDOW_ID) const override { return window_attached_instance_id; }
 
-	void window_set_rect_changed_callback(const Callable &p_callable, DisplayServerEnums::WindowID p_window = DisplayServerEnums::MAIN_WINDOW_ID) override {}
+	void window_set_rect_changed_callback(const Callable &p_callable, DisplayServerEnums::WindowID p_window = DisplayServerEnums::MAIN_WINDOW_ID) override {
+		rect_changed_callback = p_callable;
+	}
 
 	void window_set_window_event_callback(const Callable &p_callable, DisplayServerEnums::WindowID p_window = DisplayServerEnums::MAIN_WINDOW_ID) override {}
 
@@ -181,8 +206,9 @@ public:
 	void clipboard_set(const String &p_text) override {}
 	void clipboard_set_primary(const String &p_text) override {}
 
-	void virtual_keyboard_show(const String &p_existing_text, const Rect2 &p_screen_rect = Rect2(), DisplayServerEnums::VirtualKeyboardType p_type = DisplayServerEnums::KEYBOARD_TYPE_DEFAULT, int p_max_length = -1, int p_cursor_start = -1, int p_cursor_end = -1) override {}
-	void virtual_keyboard_hide() override {}
+	void virtual_keyboard_show(const String &p_existing_text, const Rect2 &p_screen_rect = Rect2(), DisplayServerEnums::VirtualKeyboardType p_type = DisplayServerEnums::KEYBOARD_TYPE_DEFAULT, int p_max_length = -1, int p_cursor_start = -1, int p_cursor_end = -1) override;
+	void virtual_keyboard_hide() override;
+	int virtual_keyboard_get_height() const override;
 
 	void cursor_set_shape(DisplayServerEnums::CursorShape p_shape) override {}
 	void cursor_set_custom_image(const Ref<Resource> &p_cursor, DisplayServerEnums::CursorShape p_shape = DisplayServerEnums::CURSOR_ARROW, const Vector2 &p_hotspot = Vector2()) override {}

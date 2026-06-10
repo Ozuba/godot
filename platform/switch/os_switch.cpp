@@ -128,7 +128,23 @@ Error OS_Switch::execute(const String &p_path, const List<String> &p_arguments, 
 }
 
 Error OS_Switch::create_process(const String &p_path, const List<String> &p_arguments, ProcessID *r_child_id, bool p_open_console) {
-	return ERR_UNAVAILABLE;
+	// Horizon homebrew cannot spawn processes; the closest equivalent is
+	// chain-loading another NRO, which takes effect once this process exits.
+	// This makes "Run project" from the editor start the game on quit.
+	if (!p_path.ends_with(".nro") && p_path != get_executable_path()) {
+		return ERR_UNAVAILABLE;
+	}
+
+	String args = p_path;
+	for (const String &arg : p_arguments) {
+		if (arg.contains_char(' ')) {
+			args += " \"" + arg + "\"";
+		} else {
+			args += " " + arg;
+		}
+	}
+	envSetNextLoad(p_path.utf8().get_data(), args.utf8().get_data());
+	return OK;
 }
 
 Error OS_Switch::kill(const ProcessID &p_pid) {
@@ -245,6 +261,13 @@ String OS_Switch::get_user_data_dir(const String &p_user_dir) const {
 int OS_Switch::get_processor_count() const {
 	// Three cores are available to applications (the fourth is reserved by the OS).
 	return 3;
+}
+
+void OS_Switch::vibrate_handheld(int p_duration_ms, float p_amplitude) {
+	if (joypad) {
+		float amplitude = p_amplitude < 0 ? 0.8f : CLAMP(p_amplitude, 0.0f, 1.0f);
+		joypad->vibrate(0, amplitude, amplitude, p_duration_ms / 1000.0f);
+	}
 }
 
 void OS_Switch::alert(const String &p_alert, const String &p_title) {

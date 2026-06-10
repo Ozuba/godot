@@ -363,6 +363,10 @@ struct sljit_extended_label {
 
 #if defined(__NetBSD__)
 #include "allocator_src/sljitProtExecAllocatorNetBSD.c"
+/* -- GODOT start -- */
+#elif defined(__SWITCH__)
+#include "allocator_src/sljitProtExecAllocatorHorizon.c"
+/* -- GODOT end -- */
 #else /* !__NetBSD__ */
 #include "allocator_src/sljitProtExecAllocatorPosix.c"
 #endif /* __NetBSD__ */

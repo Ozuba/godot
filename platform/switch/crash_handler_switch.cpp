@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  entropy_switch.cpp                                                    */
+/*  crash_handler_switch.cpp                                              */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -30,82 +30,62 @@
 
 #include "switch_wrapper.h"
 
-#include <cstddef>
-#include <cstdint>
-#include <ctime>
+#include <cstdio>
 
-// Entropy source for mbedTLS (MBEDTLS_ENTROPY_HARDWARE_ALT), backed by the
-// Horizon CSRNG service. Only referenced when the mbedtls module is enabled.
-extern "C" int mbedtls_hardware_poll(void *data, unsigned char *output, size_t len, size_t *olen) {
-	(void)data;
-	randomGet(output, len);
-	*olen = len;
-	return 0;
+// Fatal exception handler: dump registers and a frame-pointer backtrace to
+// the SD card with module-relative offsets, so they can be symbolized with
+// aarch64-none-elf-addr2line against the matching .elf.
+
+extern "C" {
+
+extern char __start__; // NRO load base.
+
+alignas(16) u8 __nx_exception_stack[0x8000];
+u64 __nx_exception_stack_size = sizeof(__nx_exception_stack);
+
+void __libnx_exception_handler(ThreadExceptionDump *ctx) {
+	FILE *f = fopen("sdmc:/godot_crash.log", "w");
+	if (!f) {
+		return;
+	}
+
+	uintptr_t base = (uintptr_t)&__start__;
+
+	fprintf(f, "Godot crash on Horizon\n");
+	fprintf(f, "error_desc=0x%x base=0x%lx\n", ctx->error_desc, (unsigned long)base);
+	// Runtime address of this function, to compute the ASLR slide host-side:
+	// slide = handler_runtime - handler_elf_vaddr (from nm).
+	fprintf(f, "handler=0x%lx\n", (unsigned long)(uintptr_t)&__libnx_exception_handler);
+	fprintf(f, "pc=0x%lx (+0x%lx)\n", (unsigned long)ctx->pc.x, (unsigned long)(ctx->pc.x - base));
+	fprintf(f, "lr=0x%lx (+0x%lx)\n", (unsigned long)ctx->lr.x, (unsigned long)(ctx->lr.x - base));
+	fprintf(f, "sp=0x%lx fp=0x%lx far=0x%lx\n", (unsigned long)ctx->sp.x, (unsigned long)ctx->fp.x, (unsigned long)ctx->far.x);
+	for (int i = 0; i < 29; i++) {
+		fprintf(f, "x%d=0x%lx\n", i, (unsigned long)ctx->cpu_gprs[i].x);
+	}
+
+	// Walk the frame pointer chain. Be defensive: a bad frame pointer must
+	// not fault inside the exception handler.
+	fprintf(f, "backtrace:\n");
+	u64 fp = ctx->fp.x;
+	for (int depth = 0; depth < 32; depth++) {
+		if (fp == 0 || (fp & 7) != 0 || fp < 0x1000) {
+			break;
+		}
+		u64 *frame = (u64 *)fp;
+		u64 next_fp = frame[0];
+		u64 ret_lr = frame[1];
+		if (ret_lr < base) {
+			fprintf(f, "  #%d lr=0x%lx (external)\n", depth, (unsigned long)ret_lr);
+		} else {
+			fprintf(f, "  #%d lr=0x%lx (+0x%lx)\n", depth, (unsigned long)ret_lr, (unsigned long)(ret_lr - base));
+		}
+		if (next_fp <= fp) {
+			break;
+		}
+		fp = next_fp;
+	}
+
+	fclose(f);
 }
 
-// newlib declares posix_memalign() but does not implement it; astcenc and
-// other thirdparty code link against it.
-#include <cerrno>
-#include <malloc.h>
-
-extern "C" int posix_memalign(void **memptr, size_t alignment, size_t size) {
-	if (alignment % sizeof(void *) != 0 || (alignment & (alignment - 1)) != 0) {
-		return EINVAL;
-	}
-	void *mem = memalign(alignment, size);
-	if (!mem) {
-		return ENOMEM;
-	}
-	*memptr = mem;
-	return 0;
-}
-
-// newlib declares dirname()/basename() in libgen.h but does not provide
-// implementations; thirdparty code (basis_universal) links against them.
-#include <cstring>
-
-extern "C" char *dirname(char *path) {
-	static char dot[] = ".";
-	if (!path || !*path) {
-		return dot;
-	}
-	char *last = path + strlen(path) - 1;
-	while (last > path && *last == '/') {
-		last--;
-	}
-	while (last > path && *last != '/') {
-		last--;
-	}
-	if (last == path) {
-		return *path == '/' ? path : dot;
-	}
-	while (last > path && *last == '/') {
-		last--;
-	}
-	last[1] = '\0';
-	return path;
-}
-
-extern "C" char *basename(char *path) {
-	static char dot[] = ".";
-	if (!path || !*path) {
-		return dot;
-	}
-	char *last = path + strlen(path) - 1;
-	while (last > path && *last == '/') {
-		*last-- = '\0';
-	}
-	while (last > path && last[-1] != '/') {
-		last--;
-	}
-	return last;
-}
-
-// Monotonic millisecond clock for mbedTLS (MBEDTLS_PLATFORM_MS_TIME_ALT).
-extern "C" int64_t mbedtls_ms_time(void) {
-	struct timespec tv;
-	if (clock_gettime(CLOCK_MONOTONIC, &tv) != 0) {
-		return (int64_t)time(nullptr) * 1000;
-	}
-	return (int64_t)tv.tv_sec * 1000 + tv.tv_nsec / 1000000;
-}
+} // extern "C"

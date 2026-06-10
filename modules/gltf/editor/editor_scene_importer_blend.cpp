@@ -516,6 +516,8 @@ bool EditorFileSystemImportFormatSupportQueryBlend::_autodetect_path() {
 		"/usr/local/bin/blender",
 		"/opt/blender/bin/blender",
 	};
+#else
+	Vector<String> find_paths;
 #endif
 
 	for (const String &find_path : find_paths) {

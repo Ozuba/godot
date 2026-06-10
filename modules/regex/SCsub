@@ -16,6 +16,12 @@ if env["builtin_pcre2"]:
 
     if env["builtin_pcre2_with_jit"]:
         thirdparty_flags.append("SUPPORT_JIT")
+        if env["platform"] == "switch":
+            # Use the dual-mapping (RW + RX alias) sljit allocator backed by
+            # libnx jitCreate(); Horizon has no mmap(PROT_EXEC). The match
+            # stack falls back to plain malloc since there is no mmap at all.
+            thirdparty_flags.append(("SLJIT_PROT_EXECUTABLE_ALLOCATOR", 1))
+            thirdparty_flags.append(("SLJIT_UTIL_SIMPLE_STACK_ALLOCATION", 1))
 
     thirdparty_sources = [
         "pcre2_auto_possess.c",

@@ -99,6 +99,8 @@ public:
 
 	virtual int get_processor_count() const override;
 
+	virtual void vibrate_handheld(int p_duration_ms = 500, float p_amplitude = -1.0) override;
+
 	virtual void alert(const String &p_alert, const String &p_title = "ALERT!") override;
 
 	void process_joypads();

@@ -14,6 +14,7 @@ switch_lib = [
     "audio_driver_switch.cpp",
     "joypad_switch.cpp",
     "entropy_switch.cpp",
+    "crash_handler_switch.cpp",
 ]
 
 prog = env.add_program("#bin/godot", switch_lib)

@@ -35,15 +35,77 @@
 
 #include <climits>
 #include <clocale>
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <sys/iosupport.h>
 #include <unistd.h>
+
+// Show a message through the system error applet, so startup failures are
+// visible on screen even without an nxlink stdio connection. The tail of the
+// boot log is appended so the actual engine error is readable on screen.
+static void show_error_applet(const char *p_message) {
+	char details[1900];
+	int written = snprintf(details, sizeof(details), "%s\n--- log tail ---\n", p_message);
+
+	fflush(stdout);
+	fflush(stderr);
+	FILE *log = fopen("sdmc:/godot_boot.log", "rb");
+	if (log && written > 0 && (size_t)written < sizeof(details) - 1) {
+		fseek(log, 0, SEEK_END);
+		long size = ftell(log);
+		long avail = (long)(sizeof(details) - 1 - written);
+		long start = size > avail ? size - avail : 0;
+		fseek(log, start, SEEK_SET);
+		size_t n = fread(details + written, 1, avail, log);
+		details[written + n] = '\0';
+	}
+	if (log) {
+		fclose(log);
+	}
+
+	ErrorSystemConfig config;
+	errorSystemCreate(&config, "Godot failed to start", details);
+	errorSystemShow(&config);
+}
+
+static int nxlink_socket = -1;
+static FILE *boot_log = nullptr;
+
+// Tee stdout/stderr to the nxlink host (when reachable) and to a boot log on
+// the SD card, so engine output is never lost.
+static ssize_t tee_write(struct _reent *r, void *fd, const char *ptr, size_t len) {
+	if (nxlink_socket >= 0) {
+		write(nxlink_socket, ptr, len);
+	}
+	if (boot_log) {
+		fwrite(ptr, 1, len, boot_log);
+		fflush(boot_log);
+	}
+	return len;
+}
+
+static const devoptab_t tee_devoptab = {
+	.name = "tee",
+	.write_r = tee_write,
+};
+
+static void setup_stdio() {
+	boot_log = fopen("sdmc:/godot_boot.log", "w");
+#ifdef NXLINK_STDIO_ENABLED
+	nxlink_socket = nxlinkConnectToHost(false, false);
+#endif
+	devoptab_list[STD_OUT] = &tee_devoptab;
+	devoptab_list[STD_ERR] = &tee_devoptab;
+	setvbuf(stdout, nullptr, _IONBF, 0);
+	setvbuf(stderr, nullptr, _IONBF, 0);
+}
 
 int main(int argc, char *argv[]) {
 	socketInitializeDefault();
-#ifdef NXLINK_STDIO_ENABLED
-	nxlinkStdio();
-#endif
-	romfsInit();
+	setup_stdio();
+	Result romfs_res = romfsInit();
+	printf("godot_switch: boot, applet_type=%d romfs=0x%x\n", (int)appletGetAppletType(), (unsigned int)romfs_res);
 
 	OS_Switch os;
 	if (argc > 0) {
@@ -67,6 +129,11 @@ int main(int argc, char *argv[]) {
 		args.push_back("gl_compatibility");
 	}
 
+	// The game pack is expected next to the executable with the same
+	// basename (e.g. sdmc:/switch/game.nro + sdmc:/switch/game.pck), which
+	// ProjectSettings::setup() resolves from the executable path.
+	printf("godot_switch: argv[0]=%s\n", argc > 0 ? argv[0] : "(none)");
+
 	int final_argc = args.size();
 	char **final_argv = (char **)malloc(sizeof(char *) * final_argc);
 	int i = 0;
@@ -74,9 +141,16 @@ int main(int argc, char *argv[]) {
 		final_argv[i++] = strdup(arg.utf8().get_data());
 	}
 
+	printf("godot_switch: calling Main::setup\n");
 	Error err = Main::setup(argv[0], final_argc, final_argv);
 
 	if (err != OK) {
+		printf("godot_switch: Main::setup failed, error %d\n", (int)err);
+		if (err != ERR_HELP) {
+			char msg[256];
+			snprintf(msg, sizeof(msg), "Main::setup failed with error %d.\nSee sdmc:/godot_boot.log for the full engine output.", (int)err);
+			show_error_applet(msg);
+		}
 		romfsExit();
 		socketExit();
 		if (err == ERR_HELP) {
@@ -85,9 +159,12 @@ int main(int argc, char *argv[]) {
 		return EXIT_FAILURE;
 	}
 
+	printf("godot_switch: Main::setup OK, calling Main::start\n");
 	if (Main::start() == EXIT_SUCCESS) {
 		os.run();
 	} else {
+		printf("godot_switch: Main::start failed\n");
+		show_error_applet("Main::start failed.\nSee sdmc:/godot_boot.log for the full engine output.");
 		os.set_exit_code(EXIT_FAILURE);
 	}
 	Main::cleanup();

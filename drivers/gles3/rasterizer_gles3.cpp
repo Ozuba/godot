@@ -81,11 +81,11 @@
 
 #include <platform_gl.h>
 
-#if defined(EGL_ENABLED) || defined(ANDROID_ENABLED)
+#if defined(EGL_ENABLED) || defined(ANDROID_ENABLED) || defined(HORIZON_ENABLED)
 #include <platform_egl.h>
 #endif
 
-#if defined(GLAD_ENABLED) || defined(EGL_ENABLED) || defined(ANDROID_ENABLED)
+#if defined(GLAD_ENABLED) || defined(EGL_ENABLED) || defined(ANDROID_ENABLED) || defined(HORIZON_ENABLED)
 // We can debug GL if we use GLAD or EGL, so not on iOS or Web.
 #define GL_DEBUG_CALLBACK
 
@@ -311,7 +311,7 @@ RasterizerGLES3::RasterizerGLES3() {
 #endif // GL_API_ENABLED
 #endif // GLAD_ENABLED
 
-#if defined(EGL_ENABLED) || defined(ANDROID_ENABLED)
+#if defined(EGL_ENABLED) || defined(ANDROID_ENABLED) || defined(HORIZON_ENABLED)
 #ifdef GLES_API_ENABLED
 	if (!RasterizerUtilGLES3::is_gles_over_gl()) {
 		if (OS::get_singleton()->is_stdout_verbose()) {

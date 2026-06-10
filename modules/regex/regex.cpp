@@ -202,6 +202,13 @@ Error RegEx::compile(const String &p_pattern, bool p_show_error) {
 		}
 		return FAILED;
 	}
+
+#ifdef SUPPORT_JIT
+	// Speeds up matching considerably. On failure (e.g. no executable memory
+	// available) pcre2_match() transparently falls back to the interpreter.
+	pcre2_jit_compile_32((pcre2_code_32 *)code, PCRE2_JIT_COMPLETE);
+#endif
+
 	return OK;
 }
 

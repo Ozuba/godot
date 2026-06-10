@@ -1,9 +1,9 @@
 /**************************************************************************/
-/*  joypad_switch.h                                                       */
+/*  platform_egl.h                                                        */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
-/*                        https://godotengine.org                        */
+/*                        https://godotengine.org                         */
 /**************************************************************************/
 /* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
 /* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
@@ -17,7 +17,7 @@
 /* the following conditions:                                              */
 /*                                                                        */
 /* The above copyright notice and this permission notice shall be         */
-/* included in all copies or substantial portions of the Software.        */
+/* included in all copies or substantial portions of the Software.       */
 /*                                                                        */
 /* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
 /* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
@@ -30,43 +30,4 @@
 
 #pragma once
 
-#include "switch_wrapper.h"
-
-#include "core/input/input.h"
-
-#define JOYPADS_MAX 8
-
-class JoypadSwitch {
-	struct Pad {
-		PadState state;
-		bool connected = false;
-		u32 style = 0; // Active HidNpadStyleTag bit.
-
-		HidVibrationDeviceHandle vibration_handles[2];
-		int vibration_handle_count = 0;
-		uint64_t vibration_timestamp = 0;
-		uint64_t vibration_end_usec = 0;
-		bool vibrating = false;
-
-		HidSixAxisSensorHandle sixaxis_handles[2];
-		int sixaxis_handle_count = 0;
-	};
-
-	Input *input = nullptr;
-	Pad pads[JOYPADS_MAX];
-
-	static u32 _active_style(u32 p_style_set);
-	static const char *_style_name(u32 p_style);
-
-	void _refresh_style(int p_index);
-	void _process_buttons_and_axes(int p_index);
-	void _process_vibration(int p_index);
-	void _process_sixaxis(int p_index);
-
-public:
-	void process();
-	void vibrate(int p_index, float p_weak, float p_strong, float p_duration_sec);
-
-	JoypadSwitch(Input *p_input);
-	~JoypadSwitch();
-};
+#include <EGL/egl.h> // IWYU pragma: export.
