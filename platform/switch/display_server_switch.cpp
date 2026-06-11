@@ -130,16 +130,19 @@ Size2i DisplayServerSwitch::screen_get_size(int p_screen) const {
 }
 
 Size2i DisplayServerSwitch::window_get_size(DisplayServerEnums::WindowID p_window) const {
-	if (egl_display != EGL_NO_DISPLAY && egl_surface != EGL_NO_SURFACE) {
-		EGLint width = 0;
-		EGLint height = 0;
-		eglQuerySurface(egl_display, egl_surface, EGL_WIDTH, &width);
-		eglQuerySurface(egl_display, egl_surface, EGL_HEIGHT, &height);
-		if (width > 0 && height > 0) {
-			return Size2i(width, height);
-		}
-	}
-	return Size2i(1280, 720);
+    if (egl_display != EGL_NO_DISPLAY && egl_surface != EGL_NO_SURFACE) {
+        EGLint width = 0;
+        EGLint height = 0;
+        eglQuerySurface(egl_display, egl_surface, EGL_WIDTH, &width);
+        eglQuerySurface(egl_display, egl_surface, EGL_HEIGHT, &height);
+        if (width > 0 && height > 0) {
+            return Size2i(width, height);
+        }
+    }
+    
+    // FIX: Fall back to checking actual operation mode instead of a hardcoded 720p
+    const bool docked = (appletGetOperationMode() == AppletOperationMode_Console);
+    return docked ? Size2i(1920, 1080) : Size2i(1280, 720);
 }
 
 int64_t DisplayServerSwitch::window_get_native_handle(DisplayServerEnums::HandleType p_handle_type, DisplayServerEnums::WindowID p_window) const {

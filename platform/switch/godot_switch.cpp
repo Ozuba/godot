@@ -40,6 +40,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <sys/iosupport.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 // Show a message through the system error applet, so startup failures are
@@ -92,9 +93,26 @@ static void setup_stdio() {
 	setvbuf(stderr, nullptr, _IONBF, 0);
 }
 
+// Point Mesa's on-disk shader cache at the SD card, before any EGL/GL init.
+// Without a writable HOME/XDG dir, Mesa keeps its cache disabled on Horizon and
+// recompiles every shader from source each boot. (Godot's own GLES3 program-
+// binary cache is a no-op here: nouveau exposes no GL_PROGRAM_BINARY formats,
+// so it only ever writes empty stubs. Mesa's NIR-level cache is the layer that
+// can actually persist.) Must run before Main::setup brings up the display.
+static void setup_shader_cache() {
+	mkdir("sdmc:/switch/godot", 0777);
+	// Mesa 20.1 reads the MESA_GLSL_CACHE_* names; Mesa >= 21.1 renamed them to
+	// MESA_SHADER_CACHE_*. Set both so this survives a portlib Mesa bump.
+	setenv("MESA_GLSL_CACHE_DIR", "sdmc:/switch/godot", 1);
+	setenv("MESA_SHADER_CACHE_DIR", "sdmc:/switch/godot", 1);
+	setenv("MESA_GLSL_CACHE_MAX_SIZE", "256M", 1);
+	setenv("MESA_SHADER_CACHE_MAX_SIZE", "256M", 1);
+}
+
 int main(int argc, char *argv[]) {
 	socketInitializeDefault();
 	setup_stdio();
+	setup_shader_cache();
 	Result romfs_res = romfsInit();
 	printf("godot_switch: boot, applet_type=%d romfs=0x%x\n", (int)appletGetAppletType(), (unsigned int)romfs_res);
 

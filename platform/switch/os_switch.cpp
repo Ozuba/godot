@@ -256,7 +256,10 @@ String OS_Switch::get_cache_path() const {
 }
 
 String OS_Switch::get_user_data_dir(const String &p_user_dir) const {
-	return get_data_path().path_join(get_godot_dir_name()).path_join("app_userdata").path_join(p_user_dir);
+	// The base OS::get_user_data_dir() already passes the full relative path
+	// (e.g. "godot/app_userdata/<name>"), so only the data root is prepended.
+	// Joining get_godot_dir_name()/app_userdata again here doubled the path.
+	return get_data_path().path_join(p_user_dir);
 }
 
 int OS_Switch::get_processor_count() const {
