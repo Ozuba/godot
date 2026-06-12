@@ -44,6 +44,14 @@
 
 #include <vk_enum_string_helper.h>
 
+#if defined(USE_VOLK) && defined(HORIZON_ENABLED)
+// Horizon has no dlopen() and no Vulkan loader; the NVK driver is linked in
+// statically as an ICD whose only public entry point is vk_icdGetInstanceProcAddr
+// (wrapped at link time by the switch-nvk loaderless shim, which services the
+// loader-managed global queries the ICD doesn't implement).
+extern "C" PFN_vkVoidFunction vk_icdGetInstanceProcAddr(VkInstance p_instance, const char *p_name);
+#endif
+
 #if defined(VK_TRACK_DRIVER_MEMORY)
 /*************************************************/
 // Driver memory tracking
@@ -894,7 +902,9 @@ Error RenderingContextDriverVulkan::_create_vulkan_instance(const VkInstanceCrea
 Error RenderingContextDriverVulkan::initialize() {
 	Error err;
 
-#ifdef USE_VOLK
+#if defined(USE_VOLK) && defined(HORIZON_ENABLED)
+	volkInitializeCustom((PFN_vkGetInstanceProcAddr)vk_icdGetInstanceProcAddr);
+#elif defined(USE_VOLK)
 	if (volkInitialize() != VK_SUCCESS) {
 		return FAILED;
 	}

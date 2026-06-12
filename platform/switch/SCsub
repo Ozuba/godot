@@ -13,6 +13,7 @@ switch_lib = [
     "display_server_switch.cpp",
     "audio_driver_switch.cpp",
     "joypad_switch.cpp",
+    "rendering_context_driver_vulkan_switch.cpp",
     "entropy_switch.cpp",
     "crash_handler_switch.cpp",
     "switch_logger.cpp",

@@ -44,10 +44,12 @@ extern "C" int mbedtls_hardware_poll(void *data, unsigned char *output, size_t l
 }
 
 // newlib declares posix_memalign() but does not implement it; astcenc and
-// other thirdparty code link against it.
+// other thirdparty code link against it. The NVK package's libc shim ships
+// its own copy, so only provide one when linking without Vulkan.
 #include <cerrno>
 #include <malloc.h>
 
+#ifndef VULKAN_ENABLED
 extern "C" int posix_memalign(void **memptr, size_t alignment, size_t size) {
 	if (alignment % sizeof(void *) != 0 || (alignment & (alignment - 1)) != 0) {
 		return EINVAL;
@@ -59,6 +61,7 @@ extern "C" int posix_memalign(void **memptr, size_t alignment, size_t size) {
 	*memptr = mem;
 	return 0;
 }
+#endif // !VULKAN_ENABLED
 
 // newlib declares dirname()/basename() in libgen.h but does not provide
 // implementations; thirdparty code (basis_universal) links against them.

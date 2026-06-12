@@ -39,8 +39,6 @@
 
 extern "C" {
 
-extern char __start__; // NRO load base.
-
 alignas(16) u8 __nx_exception_stack[0x8000];
 u64 __nx_exception_stack_size = sizeof(__nx_exception_stack);
 
@@ -54,7 +52,15 @@ void __libnx_exception_handler(ThreadExceptionDump *ctx) {
 		return;
 	}
 
-	uintptr_t base = (uintptr_t)&__start__;
+	// Module load base for ASLR relocation. (&__start__ folds to 0 here, so
+	// ask the kernel for the .text region containing this function instead;
+	// the NRO's text segment starts at the load base.)
+	uintptr_t base = 0;
+	MemoryInfo mem_info = {};
+	u32 page_info = 0;
+	if (R_SUCCEEDED(svcQueryMemory(&mem_info, &page_info, (u64)&__libnx_exception_handler))) {
+		base = mem_info.addr;
+	}
 
 	fprintf(f, "Godot crash on Horizon\n");
 	fprintf(f, "error_desc=0x%x base=0x%lx\n", ctx->error_desc, (unsigned long)base);

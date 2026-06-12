@@ -1,9 +1,17 @@
 # Switch platform port (libnx homebrew)
 
 Unofficial Godot 4.7 port to the Nintendo Switch using devkitPro's libnx
-toolchain. Rendering uses the **gl_compatibility** (GLES3) renderer through
-the Mesa/nouveau OpenGL ES driver shipped in devkitPro portlibs. A Vulkan
-(NVK) backend can be added later once Mesa NVK support lands for Horizon.
+toolchain. Rendering uses **Vulkan over NVK** — Mesa's open-source Vulkan
+driver for NVIDIA GPUs, ported to the Tegra X1/GM20B by the
+[switch-nvk](https://github.com/.../switch-nvk) project — with the
+**Forward Mobile** rendering method as the default. The driver is linked
+statically (Horizon has no `dlopen`/Vulkan loader) and presents through a
+`VK_NN_vi_surface` WSI with a zero-copy block-linear swapchain on the libnx
+`nwindow`.
+
+The previous **gl_compatibility** (GLES3) renderer over the Mesa GL portlibs
+is **deprecated**: it is no longer built by default and is scheduled for
+removal. Build with `opengl3=yes` to temporarily get it back.
 
 This is a homebrew port; it runs on consoles with custom firmware via
 hbmenu/nxlink and is not affiliated with or endorsed by Nintendo.
@@ -12,8 +20,12 @@ hbmenu/nxlink and is not affiliated with or endorsed by Nintendo.
 
 - devkitPro with the `switch-dev` group installed (`DEVKITPRO` must be set,
   with `devkitA64` and `libnx` present).
-- Mesa GLES/EGL portlibs (`switch-mesa`, `switch-libdrm_nouveau`), normally
-  pulled in by `switch-dev`.
+- The **switch-nvk package**: `nvk-switch/{lib/libvulkan.a, include/vulkan}`,
+  produced by `package-nvk.sh` in the switch-nvk repo. Auto-detected at
+  `../switch-nvk/nvk-switch` (sibling checkout) or `$DEVKITPRO/nvk-switch`;
+  otherwise point `switch_nvk_path=` (or `SWITCH_NVK_PATH`) at it.
+- `switch-expat` portlib (Mesa's xmlconfig dependency).
+- (Deprecated GL path only: `switch-mesa`, `switch-libdrm_nouveau` portlibs.)
 
 ## Building
 
@@ -87,11 +99,16 @@ editor's remote-debug flags so the debugger can attach.
 
 ## Running a project manually
 
-The port only registers the `opengl3` rendering driver and forces
-`--rendering-method gl_compatibility` unless one is passed explicitly, so
-projects do not need to be pre-configured for the compatibility renderer
-(though textures must be imported with a format the GPU supports — S3TC/BPTC
-work via Mesa on the Tegra X1; ETC2 is decompressed in software by Mesa).
+The port registers the `vulkan` rendering driver and forces
+`--rendering-method mobile` (Forward Mobile) unless one is passed explicitly,
+so projects do not need to be pre-configured for it. Forward+ also runs on
+NVK (`--rendering-method forward_plus`) but is not sized for the Tegra X1.
+Textures must be imported with a format the GPU supports — S3TC/BPTC work on
+the Tegra X1; prefer those over ETC2.
+
+> **Memory note:** NVK needs the full application memory pool to initialize
+> its GPU channel. Launch the homebrew with **title takeover** ("boot as
+> application"), not from the album applet.
 
 Typical homebrew layout on the SD card:
 
@@ -115,11 +132,21 @@ User data (`user://`) is stored under `sdmc:/switch/godot/app_userdata/<name>`.
   `getifaddrs()`, so `OS_Unix` is not usable), reusing the unix FileAccess /
   DirAccess / NetSocket / IP drivers, which were given `HORIZON_ENABLED`
   guards.
-- `DisplayServerSwitch` owns the EGL display/surface/context on the default
-  `NWindow` (`eglGetDisplay(EGL_DEFAULT_DISPLAY)` — Mesa's platform-extension
-  path is not available on Horizon, so `EGLManager` is bypassed) and calls
-  `RasterizerGLES3::make_current(false)` (native GLES, not GL-over-GLES).
-  Touch input is polled from HID each frame.
+- The Vulkan stack: `volkInitializeCustom()` is bootstrapped from the
+  statically linked NVK ICD's `vk_icdGetInstanceProcAddr` (guarded patch in
+  `drivers/vulkan/rendering_context_driver_vulkan.cpp`; the link wraps it with
+  switch-nvk's loaderless shim to service loader-managed global queries).
+  `RenderingContextDriverVulkanSwitch` creates the surface with
+  `vkCreateViSurfaceNN` on `nwindowGetDefault()`. The consumer link needs
+  `-Wl,--wrap=open,close,stat,lstat` (the NVK winsys's libc shim; non-GPU
+  paths fall through to newlib) — wired up in `detect.py`.
+- Docked/handheld switches recreate the surface + swapchain Android-style
+  (`screen_free` → `window_destroy` → `nwindowSetDimensions` →
+  `window_create` → `screen_create`); the WSI reads the new nwindow size.
+- The deprecated GLES path (built only with `opengl3=yes`) owns an EGL
+  display/surface/context on the default `NWindow` and calls
+  `RasterizerGLES3::make_current(false)`.
+- Touch input is polled from HID each frame.
 - Audio uses the `audren` renderer (stereo, 48 kHz device rate, mixed at the
   project mix rate) on a dedicated thread.
 - Joypads: up to 8 standard-style npads; pad 1 doubles as handheld mode.
@@ -132,7 +159,7 @@ User data (`user://`) is stored under `sdmc:/switch/godot/app_userdata/<name>`.
 
 ## Known limitations / TODO
 
-- Software keyboard (swkbd) is not wired up yet (`virtual_keyboard_show`).
-- Docked/handheld mode switches do not resize the window at runtime yet
-  (the EGL surface size is fixed at startup).
-- Vulkan/NVK rendering driver pending upstream Mesa support.
+- The NVK WSI is FIFO-only: vsync cannot be disabled.
+- First boot compiles all pipelines through NAK; Mesa's disk cache
+  (`sdmc:/switch/godot`) makes subsequent boots fast.
+- The deprecated GLES3/EGL renderer (`opengl3=yes`) is scheduled for removal.

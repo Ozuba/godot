@@ -35,6 +35,15 @@
 #include "core/input/input_event.h"
 #include "servers/display/native_menu.h"
 
+#ifdef RD_ENABLED
+#include "servers/rendering/renderer_rd/renderer_compositor_rd.h"
+#include "servers/rendering/rendering_device.h"
+
+#ifdef VULKAN_ENABLED
+#include "rendering_context_driver_vulkan_switch.h"
+#endif
+#endif
+
 #ifdef GLES3_ENABLED
 #include "drivers/gles3/rasterizer_gles3.h"
 #endif
@@ -43,6 +52,9 @@
 
 Vector<String> DisplayServerSwitch::get_rendering_drivers_func() {
 	Vector<String> drivers;
+#ifdef VULKAN_ENABLED
+	drivers.push_back("vulkan");
+#endif
 #ifdef GLES3_ENABLED
 	drivers.push_back("opengl3");
 #endif
@@ -53,7 +65,7 @@ DisplayServer *DisplayServerSwitch::create_func(const String &p_rendering_driver
 	DisplayServer *ds = memnew(DisplayServerSwitch(p_rendering_driver, p_mode, p_vsync_mode, p_flags, p_position, p_resolution, p_screen, p_context, p_parent_window, r_error));
 	if (r_error != OK) {
 		OS::get_singleton()->alert(
-				"Unable to initialize the OpenGL ES 3.0 video driver.",
+				vformat("Unable to initialize the %s video driver.", p_rendering_driver),
 				"Unable to initialize video driver");
 	}
 	return ds;
@@ -97,31 +109,45 @@ void DisplayServerSwitch::_update_operation_mode() {
 
 	const bool docked = appletGetOperationMode() == AppletOperationMode_Console;
 	const Size2i new_size = docked ? Size2i(1920, 1080) : Size2i(1280, 720);
-	if (egl_display == EGL_NO_DISPLAY || window_get_size() == new_size) {
+	if (window_get_size() == new_size) {
 		return;
 	}
 
-	// The EGL surface is tied to the native window dimensions, so it has to
-	// be recreated when switching between handheld and docked mode.
-	eglMakeCurrent(egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
-	if (egl_surface != EGL_NO_SURFACE) {
-		eglDestroySurface(egl_display, egl_surface);
-		egl_surface = EGL_NO_SURFACE;
+#ifdef VULKAN_ENABLED
+	if (rendering_driver == "vulkan") {
+		_resize_vulkan_window(new_size);
 	}
+#endif
 
-	NWindow *win = nwindowGetDefault();
-	nwindowSetDimensions(win, new_size.width, new_size.height);
+#ifdef GLES3_ENABLED
+	if (rendering_driver == "opengl3") {
+		if (egl_display == EGL_NO_DISPLAY) {
+			return;
+		}
 
-	egl_surface = eglCreateWindowSurface(egl_display, egl_config, (EGLNativeWindowType)win, nullptr);
-	if (egl_surface == EGL_NO_SURFACE) {
-		ERR_PRINT(vformat("Failed to recreate EGL surface after mode switch. Error: %d", eglGetError()));
-		return;
+		// The EGL surface is tied to the native window dimensions, so it has to
+		// be recreated when switching between handheld and docked mode.
+		eglMakeCurrent(egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+		if (egl_surface != EGL_NO_SURFACE) {
+			eglDestroySurface(egl_display, egl_surface);
+			egl_surface = EGL_NO_SURFACE;
+		}
+
+		NWindow *win = nwindowGetDefault();
+		nwindowSetDimensions(win, new_size.width, new_size.height);
+
+		egl_surface = eglCreateWindowSurface(egl_display, egl_config, (EGLNativeWindowType)win, nullptr);
+		if (egl_surface == EGL_NO_SURFACE) {
+			ERR_PRINT(vformat("Failed to recreate EGL surface after mode switch. Error: %d", eglGetError()));
+			return;
+		}
+		eglMakeCurrent(egl_display, egl_surface, egl_surface, egl_context);
+		eglSwapInterval(egl_display, vsync_mode == DisplayServerEnums::VSYNC_DISABLED ? 0 : 1);
 	}
-	eglMakeCurrent(egl_display, egl_surface, egl_surface, egl_context);
-	eglSwapInterval(egl_display, vsync_mode == DisplayServerEnums::VSYNC_DISABLED ? 0 : 1);
+#endif
 
 	if (rect_changed_callback.is_valid()) {
-		rect_changed_callback.call(Rect2i(Point2i(), new_size));
+		rect_changed_callback.call(Rect2i(Point2i(), window_get_size()));
 	}
 }
 
@@ -130,32 +156,40 @@ Size2i DisplayServerSwitch::screen_get_size(int p_screen) const {
 }
 
 Size2i DisplayServerSwitch::window_get_size(DisplayServerEnums::WindowID p_window) const {
-    if (egl_display != EGL_NO_DISPLAY && egl_surface != EGL_NO_SURFACE) {
-        EGLint width = 0;
-        EGLint height = 0;
-        eglQuerySurface(egl_display, egl_surface, EGL_WIDTH, &width);
-        eglQuerySurface(egl_display, egl_surface, EGL_HEIGHT, &height);
-        if (width > 0 && height > 0) {
-            return Size2i(width, height);
-        }
-    }
-    
-    // FIX: Fall back to checking actual operation mode instead of a hardcoded 720p
-    const bool docked = (appletGetOperationMode() == AppletOperationMode_Console);
-    return docked ? Size2i(1920, 1080) : Size2i(1280, 720);
+#ifdef RD_ENABLED
+	if (rendering_context && rd_window_size != Size2i()) {
+		return rd_window_size;
+	}
+#endif
+#ifdef GLES3_ENABLED
+	if (egl_display != EGL_NO_DISPLAY && egl_surface != EGL_NO_SURFACE) {
+		EGLint width = 0;
+		EGLint height = 0;
+		eglQuerySurface(egl_display, egl_surface, EGL_WIDTH, &width);
+		eglQuerySurface(egl_display, egl_surface, EGL_HEIGHT, &height);
+		if (width > 0 && height > 0) {
+			return Size2i(width, height);
+		}
+	}
+#endif
+
+	const bool docked = (appletGetOperationMode() == AppletOperationMode_Console);
+	return docked ? Size2i(1920, 1080) : Size2i(1280, 720);
 }
 
 int64_t DisplayServerSwitch::window_get_native_handle(DisplayServerEnums::HandleType p_handle_type, DisplayServerEnums::WindowID p_window) const {
 	switch (p_handle_type) {
-		case DisplayServerEnums::DISPLAY_HANDLE: {
-			return reinterpret_cast<int64_t>(egl_display);
-		}
 		case DisplayServerEnums::WINDOW_HANDLE: {
 			return reinterpret_cast<int64_t>(nwindowGetDefault());
+		}
+#ifdef GLES3_ENABLED
+		case DisplayServerEnums::DISPLAY_HANDLE: {
+			return reinterpret_cast<int64_t>(egl_display);
 		}
 		case DisplayServerEnums::OPENGL_CONTEXT: {
 			return reinterpret_cast<int64_t>(egl_context);
 		}
+#endif
 		default: {
 			return 0;
 		}
@@ -163,23 +197,38 @@ int64_t DisplayServerSwitch::window_get_native_handle(DisplayServerEnums::Handle
 }
 
 void DisplayServerSwitch::window_set_vsync_mode(DisplayServerEnums::VSyncMode p_vsync_mode, DisplayServerEnums::WindowID p_window) {
+#ifdef RD_ENABLED
+	if (rendering_context) {
+		rendering_context->window_set_vsync_mode(DisplayServerEnums::MAIN_WINDOW_ID, p_vsync_mode);
+		// The NVK WSI only implements FIFO presentation, so this reports back
+		// whatever the swapchain could actually be configured with.
+		vsync_mode = rendering_context->window_get_vsync_mode(DisplayServerEnums::MAIN_WINDOW_ID);
+		return;
+	}
+#endif
+#ifdef GLES3_ENABLED
 	if (egl_display == EGL_NO_DISPLAY) {
 		return;
 	}
 	vsync_mode = (p_vsync_mode == DisplayServerEnums::VSYNC_DISABLED) ? DisplayServerEnums::VSYNC_DISABLED : DisplayServerEnums::VSYNC_ENABLED;
 	eglSwapInterval(egl_display, vsync_mode == DisplayServerEnums::VSYNC_DISABLED ? 0 : 1);
+#endif
 }
 
 void DisplayServerSwitch::release_rendering_thread() {
+#ifdef GLES3_ENABLED
 	if (egl_display != EGL_NO_DISPLAY) {
 		eglMakeCurrent(egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
 	}
+#endif
 }
 
 void DisplayServerSwitch::swap_buffers() {
+#ifdef GLES3_ENABLED
 	if (egl_display != EGL_NO_DISPLAY) {
 		eglSwapBuffers(egl_display, egl_surface);
 	}
+#endif
 }
 
 void DisplayServerSwitch::_process_touch() {
@@ -386,6 +435,84 @@ void DisplayServerSwitch::process_events() {
 	Input::get_singleton()->flush_buffered_events();
 }
 
+#ifdef VULKAN_ENABLED
+Error DisplayServerSwitch::_initialize_vulkan(DisplayServerEnums::VSyncMode p_vsync_mode) {
+	rendering_context = memnew(RenderingContextDriverVulkanSwitch);
+	if (rendering_context->initialize() != OK) {
+		memdelete(rendering_context);
+		rendering_context = nullptr;
+		ERR_PRINT("Failed to initialize the NVK Vulkan context. Note that NVK needs the full application memory pool; launch the homebrew with title takeover (\"boot as application\"), not as an album applet.");
+		return ERR_UNAVAILABLE;
+	}
+
+	// Size the native window for the current operation mode up front; the
+	// driver's WSI reads the nwindow dimensions for the swapchain extent.
+	NWindow *win = nwindowGetDefault();
+	const bool docked = appletGetOperationMode() == AppletOperationMode_Console;
+	const Size2i size = docked ? Size2i(1920, 1080) : Size2i(1280, 720);
+	nwindowSetDimensions(win, size.width, size.height);
+
+	RenderingContextDriverVulkanSwitch::WindowPlatformData wpd;
+	wpd.window = win;
+	if (rendering_context->window_create(DisplayServerEnums::MAIN_WINDOW_ID, &wpd) != OK) {
+		ERR_PRINT("Failed to create the Vulkan window.");
+		memdelete(rendering_context);
+		rendering_context = nullptr;
+		return ERR_UNAVAILABLE;
+	}
+	rendering_context->window_set_size(DisplayServerEnums::MAIN_WINDOW_ID, size.width, size.height);
+	rendering_context->window_set_vsync_mode(DisplayServerEnums::MAIN_WINDOW_ID, p_vsync_mode);
+	vsync_mode = rendering_context->window_get_vsync_mode(DisplayServerEnums::MAIN_WINDOW_ID);
+
+	rendering_device = memnew(RenderingDevice);
+	if (rendering_device->initialize(rendering_context, DisplayServerEnums::MAIN_WINDOW_ID) != OK) {
+		ERR_PRINT("Failed to initialize the rendering device on NVK.");
+		memdelete(rendering_device);
+		rendering_device = nullptr;
+		rendering_context->window_destroy(DisplayServerEnums::MAIN_WINDOW_ID);
+		memdelete(rendering_context);
+		rendering_context = nullptr;
+		return ERR_UNAVAILABLE;
+	}
+	rendering_device->screen_create(DisplayServerEnums::MAIN_WINDOW_ID);
+
+	RendererCompositorRD::make_current();
+
+	rd_window_size = size;
+	return OK;
+}
+
+// Docked/handheld switches change the output resolution. The swapchain has to
+// be torn down before the nwindow can change dimensions (destroying it is what
+// releases the nwindow buffers the WSI configured), so recreate the whole
+// surface + screen like DisplayServerAndroid::reset_window() does.
+void DisplayServerSwitch::_resize_vulkan_window(const Size2i &p_size) {
+	if (!rendering_context || !rendering_device) {
+		return;
+	}
+
+	rendering_device->screen_free(DisplayServerEnums::MAIN_WINDOW_ID);
+	DisplayServerEnums::VSyncMode last_vsync_mode = rendering_context->window_get_vsync_mode(DisplayServerEnums::MAIN_WINDOW_ID);
+	rendering_context->window_destroy(DisplayServerEnums::MAIN_WINDOW_ID);
+
+	NWindow *win = nwindowGetDefault();
+	nwindowSetDimensions(win, p_size.width, p_size.height);
+
+	RenderingContextDriverVulkanSwitch::WindowPlatformData wpd;
+	wpd.window = win;
+	if (rendering_context->window_create(DisplayServerEnums::MAIN_WINDOW_ID, &wpd) != OK) {
+		ERR_PRINT("Failed to recreate the Vulkan window after a docked/handheld mode switch.");
+		return;
+	}
+	rendering_context->window_set_size(DisplayServerEnums::MAIN_WINDOW_ID, p_size.width, p_size.height);
+	rendering_context->window_set_vsync_mode(DisplayServerEnums::MAIN_WINDOW_ID, last_vsync_mode);
+	rendering_device->screen_create(DisplayServerEnums::MAIN_WINDOW_ID);
+
+	rd_window_size = p_size;
+}
+#endif // VULKAN_ENABLED
+
+#ifdef GLES3_ENABLED
 Error DisplayServerSwitch::_initialize_egl() {
 	egl_display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
 	if (egl_display == EGL_NO_DISPLAY) {
@@ -475,13 +602,24 @@ void DisplayServerSwitch::_finalize_egl() {
 		egl_display = EGL_NO_DISPLAY;
 	}
 }
+#endif // GLES3_ENABLED
 
 DisplayServerSwitch::DisplayServerSwitch(const String &p_rendering_driver, DisplayServerEnums::WindowMode p_mode, DisplayServerEnums::VSyncMode p_vsync_mode, uint32_t p_flags, const Vector2i *p_position, const Vector2i &p_resolution, int p_screen, DisplayServerEnums::Context p_context, int64_t p_parent_window, Error &r_error) {
 	r_error = ERR_UNAVAILABLE;
 
+	rendering_driver = p_rendering_driver;
+
 	native_menu = memnew(NativeMenu);
 
 	hidInitializeTouchScreen();
+
+#ifdef VULKAN_ENABLED
+	if (p_rendering_driver == "vulkan") {
+		if (_initialize_vulkan(p_vsync_mode) != OK) {
+			return;
+		}
+	}
+#endif
 
 #ifdef GLES3_ENABLED
 	if (p_rendering_driver == "opengl3") {
@@ -490,10 +628,9 @@ DisplayServerSwitch::DisplayServerSwitch(const String &p_rendering_driver, Displ
 		}
 
 		RasterizerGLES3::make_current(false);
+		window_set_vsync_mode(p_vsync_mode);
 	}
 #endif
-
-	window_set_vsync_mode(p_vsync_mode);
 
 	appletHook(&applet_hook_cookie, _applet_hook, this);
 
@@ -517,5 +654,20 @@ DisplayServerSwitch::~DisplayServerSwitch() {
 		native_menu = nullptr;
 	}
 
+#ifdef RD_ENABLED
+	if (rendering_device) {
+		rendering_device->screen_free(DisplayServerEnums::MAIN_WINDOW_ID);
+		memdelete(rendering_device);
+		rendering_device = nullptr;
+	}
+	if (rendering_context) {
+		rendering_context->window_destroy(DisplayServerEnums::MAIN_WINDOW_ID);
+		memdelete(rendering_context);
+		rendering_context = nullptr;
+	}
+#endif
+
+#ifdef GLES3_ENABLED
 	_finalize_egl();
+#endif
 }

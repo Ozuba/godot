@@ -13,6 +13,9 @@
 	#else
 		typedef int (__stdcall* FARPROC)(void);
 	#endif
+#elif defined(__SWITCH__)
+	/* godot-switch: Horizon has no dynamic loader (no dlfcn.h); the driver is
+	 * linked statically and volk is bootstrapped with volkInitializeCustom(). */
 #else
 #	include <dlfcn.h>
 #endif
@@ -83,7 +86,11 @@ static PFN_vkVoidFunction nullProcAddrStub(void* context, const char* name)
 
 VkResult volkInitialize(void)
 {
-#if defined(_WIN32)
+#if defined(__SWITCH__)
+	/* godot-switch: no dynamic loader; use volkInitializeCustom(). */
+	void* module = NULL;
+	return VK_ERROR_INITIALIZATION_FAILED;
+#elif defined(_WIN32)
 	HMODULE module = LoadLibraryA("vulkan-1.dll");
 	if (!module)
 		return VK_ERROR_INITIALIZATION_FAILED;
@@ -141,7 +148,7 @@ void volkFinalize(void)
 	{
 #if defined(_WIN32)
 		FreeLibrary((HMODULE)loadedModule);
-#else
+#elif !defined(__SWITCH__)
 		dlclose(loadedModule);
 #endif
 	}

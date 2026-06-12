@@ -30,7 +30,13 @@ def can_build():
 
 
 def get_opts():
-    return []
+    return [
+        (
+            "switch_nvk_path",
+            "Path to the switch-nvk package (containing lib/libvulkan.a and include/vulkan)",
+            os.environ.get("SWITCH_NVK_PATH", ""),
+        ),
+    ]
 
 
 def get_doc_classes():
@@ -45,8 +51,15 @@ def get_flags():
     return {
         "arch": "arm64",
         "target": "template_debug",
-        "vulkan": False,
-        "opengl3": True,
+        # The renderer is Vulkan over the statically linked NVK driver from the
+        # switch-nvk project (Mesa's open-source driver for the Tegra X1 GM20B,
+        # with a VK_NN_vi_surface WSI over the libnx nwindow).
+        "vulkan": True,
+        "use_volk": True,
+        # DEPRECATED: the old GLES3 compatibility renderer over the Mesa
+        # portlibs (libEGL/libGLESv2/libglapi). Build with opengl3=yes to get
+        # it back; it is scheduled for removal.
+        "opengl3": False,
         "sdl": False,
         "accesskit": False,
         # PCRE2 JIT works through libnx jitCreate() (CodeMemory backend);
@@ -123,7 +136,21 @@ def configure(env: "SConsEnvironment"):
         ]
     )
 
+    if env["vulkan"]:
+        # NVK (Mesa's open-source Vulkan driver) ported to the Tegra X1 by the
+        # Bypass switch-nvk and use externally built Vulkan
+        env.Append(LIBPATH=["/workspaces/godot-switch/builddir-switch/builddir-switch/src/nouveau/vulkan"])
+        env.Append(CPPPATH=["/workspaces/godot-switch/builddir-switch/builddir-switch/include"])
+        env.Append(CPPDEFINES=["VULKAN_ENABLED", "RD_ENABLED", "VK_USE_PLATFORM_VI_NN"])
+        
+        # Link normal vulkan, but force whole-archive only on nak_rs to preserve its TLS sections
+        nak_rs_path = "/workspaces/godot-switch/builddir-switch/builddir-switch/src/nouveau/compiler/libnak_rs.a"
+        env.Append(LINKFLAGS=["-Wl,--whole-archive", nak_rs_path, "-Wl,--no-whole-archive"])
+        env.Append(LIBS=["vulkan", "expat"])
+
     if env["opengl3"]:
+        # DEPRECATED: GLES3 compatibility renderer over the Mesa GL portlibs.
+        print("WARNING: the GLES3/EGL renderer on the Mesa portlibs is deprecated; the supported renderer is Vulkan (NVK).")
         env.Append(CPPDEFINES=["GLES3_ENABLED"])
         env.Append(LIBS=["EGL", "GLESv2", "glapi", "drm_nouveau"])
 

@@ -93,26 +93,47 @@ static void setup_stdio() {
 	setvbuf(stderr, nullptr, _IONBF, 0);
 }
 
-// Point Mesa's on-disk shader cache at the SD card, before any EGL/GL init.
-// Without a writable HOME/XDG dir, Mesa keeps its cache disabled on Horizon and
-// recompiles every shader from source each boot. (Godot's own GLES3 program-
-// binary cache is a no-op here: nouveau exposes no GL_PROGRAM_BINARY formats,
-// so it only ever writes empty stubs. Mesa's NIR-level cache is the layer that
-// can actually persist.) Must run before Main::setup brings up the display.
-static void setup_shader_cache() {
+// NVK runtime environment; must run before Main::setup brings up the display.
+static void setup_nvk_env() {
+	// Upstream NVK only exposes Turing+ GPUs; the Tegra X1's GM20B (Maxwell)
+	// is gated behind this opt-in. Without it vkEnumeratePhysicalDevices
+	// reports zero devices.
+	setenv("NVK_I_WANT_A_BROKEN_VULKAN_DRIVER", "1", 1);
+
+	// The Switch uses a freestanding Rust target where std::thread bypasses libnx's
+	// pthread_create and calls svcCreateThread directly. This leaves tpidr_el0 (TLS)
+	// uninitialized, causing a crash when NAK tries to use thread_local variables.
+	// Force NAK/Mesa to run single-threaded on the current thread (which has valid TLS).
+	setenv("RAYON_NUM_THREADS", "1", 1);
+	setenv("MESA_SHADER_COMPILER_THREADS", "1", 1);
+
+#ifdef DEBUG_ENABLED
+	// GPU-hang bring-up aid: make NVK sync after EVERY queue submit and, when
+	// one fails, dump that command buffer to stderr as decoded methods
+	// (nvk_queue.c push_sync + nvk_cmd_buffer_dump). Serializes submission, so
+	// it costs performance; remove once the renderer is stable on hardware.
+	//setenv("NVK_DEBUG", "push_sync", 1);
+	// Hang-point bisection: the drm shim splits each push into chunks of this
+	// many dwords at method boundaries with a syncpoint increment in between,
+	// so the drain diagnostic's `current` value names the exact chunk (= dword
+	// range in the push_sync dump) the GPU died in. 64 dwords ≈ a dozen
+	// methods per chunk.
+	//setenv("DRM_SHIM_BISECT", "64", 1);
+#endif
+
+	// Point Mesa's on-disk shader cache at the SD card. Without a writable
+	// HOME/XDG dir, Mesa keeps its cache disabled on Horizon and NVK's NAK
+	// compiler recompiles every pipeline shader from SPIR-V each boot.
 	mkdir("sdmc:/switch/godot", 0777);
-	// Mesa 20.1 reads the MESA_GLSL_CACHE_* names; Mesa >= 21.1 renamed them to
-	// MESA_SHADER_CACHE_*. Set both so this survives a portlib Mesa bump.
-	setenv("MESA_GLSL_CACHE_DIR", "sdmc:/switch/godot", 1);
 	setenv("MESA_SHADER_CACHE_DIR", "sdmc:/switch/godot", 1);
-	setenv("MESA_GLSL_CACHE_MAX_SIZE", "256M", 1);
 	setenv("MESA_SHADER_CACHE_MAX_SIZE", "256M", 1);
 }
 
 int main(int argc, char *argv[]) {
 	socketInitializeDefault();
 	setup_stdio();
-	setup_shader_cache();
+	
+	setup_nvk_env();
 	Result romfs_res = romfsInit();
 	printf("godot_switch: boot, applet_type=%d romfs=0x%x\n", (int)appletGetAppletType(), (unsigned int)romfs_res);
 
@@ -123,8 +144,10 @@ int main(int argc, char *argv[]) {
 
 	setlocale(LC_CTYPE, "");
 
-	// Force the GL compatibility renderer unless the user passed an explicit
-	// choice; the Switch port only registers the opengl3 driver.
+	// Force the Forward Mobile renderer on Vulkan/NVK unless the user passed
+	// an explicit choice; it is the rendering method sized for the Tegra X1.
+	// (Forward+ also runs on NVK and can be requested with
+	// --rendering-method forward_plus.)
 	List<String> args;
 	bool has_rendering_method = false;
 	bool has_main_pack = false;
@@ -139,8 +162,19 @@ int main(int argc, char *argv[]) {
 	}
 	if (!has_rendering_method) {
 		args.push_back("--rendering-method");
-		args.push_back("gl_compatibility");
+		args.push_back("mobile");
 	}
+
+#ifdef DEBUG_ENABLED
+	// Verbose stdout makes Godot register a VK_EXT_debug_utils messenger,
+	// which is the only way Mesa's vk_errorf() diagnostics (e.g. the precise
+	// reason a vkCreateDevice fails) reach the console on a release Mesa
+	// build; without it they are silently dropped.
+	//.push_back("--verbose");
+	// Sync after every breadcrumb so a GPU hang names the exact render pass
+	// instead of a window of them (pairs with NVK_DEBUG=push_sync above).
+	//args.push_back("--accurate-breadcrumbs");
+#endif
 
 	// Fused build: the editor's Switch exporter embeds the game pack in the
 	// NRO's RomFS as romfs:/game.pck. When RomFS mounted and no pack was given

@@ -35,9 +35,15 @@
 #include "core/input/input.h"
 #include "servers/display/display_server.h"
 
+#ifdef GLES3_ENABLED
 #include <EGL/egl.h>
+#endif
 
 class NativeMenu;
+#ifdef RD_ENABLED
+class RenderingContextDriver;
+class RenderingDevice;
+#endif
 
 class DisplayServerSwitch : public DisplayServer {
 	GDSOFTCLASS(DisplayServerSwitch, DisplayServer);
@@ -50,8 +56,14 @@ class DisplayServerSwitch : public DisplayServer {
 	static void _dispatch_input_events(const Ref<InputEvent> &p_event);
 	void _dispatch_input_event(const Ref<InputEvent> &p_event);
 
+#ifdef GLES3_ENABLED
 	Error _initialize_egl();
 	void _finalize_egl();
+#endif
+#ifdef VULKAN_ENABLED
+	Error _initialize_vulkan(DisplayServerEnums::VSyncMode p_vsync_mode);
+	void _resize_vulkan_window(const Size2i &p_size);
+#endif
 
 	void _process_touch();
 
@@ -70,10 +82,20 @@ class DisplayServerSwitch : public DisplayServer {
 	Callable input_event_callback;
 	Callable rect_changed_callback;
 
+	String rendering_driver;
+
+#ifdef GLES3_ENABLED
 	EGLDisplay egl_display = EGL_NO_DISPLAY;
 	EGLSurface egl_surface = EGL_NO_SURFACE;
 	EGLContext egl_context = EGL_NO_CONTEXT;
 	EGLConfig egl_config = nullptr;
+#endif
+
+#ifdef RD_ENABLED
+	RenderingContextDriver *rendering_context = nullptr;
+	RenderingDevice *rendering_device = nullptr;
+	Size2i rd_window_size;
+#endif
 
 	DisplayServerEnums::VSyncMode vsync_mode = DisplayServerEnums::VSYNC_ENABLED;
 
