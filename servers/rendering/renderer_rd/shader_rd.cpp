@@ -598,7 +598,9 @@ String ShaderRD::_version_get_sha1(Version *p_version) const {
 }
 
 static const char *shader_file_header = "GDSC";
-static const uint32_t cache_file_version = 4;
+// Bumped 4 -> 5 for the Switch/GM20B sky.glsl loop clamp: the cache key does
+// not cover template edits, so stale unclamped shaders survived otherwise.
+static const uint32_t cache_file_version = 12; // final: NAK auto-unroll fix, pristine shaders
 
 String ShaderRD::_get_cache_file_relative_path(Version *p_version, int p_group, const String &p_api_name) {
 	String sha1 = _version_get_sha1(p_version);

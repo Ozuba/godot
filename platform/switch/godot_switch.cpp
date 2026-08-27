@@ -30,6 +30,8 @@
 
 #include "os_switch.h"
 #include "switch_logger.h"
+
+#include <atomic>
 #include "switch_wrapper.h"
 
 #include "main/main.h"
@@ -70,14 +72,36 @@ static void show_error_applet(const char *p_message) {
 	errorSystemShow(&config);
 }
 
-// Route raw stdout/stderr (entry-point prints, thirdparty libraries) into the
-// shared buffered boot log. Engine output goes there directly through
-// SwitchLogger; neither path syncs the SD card per write.
+// Route raw stdout/stderr (entry-point prints, thirdparty libraries) into a
+// SEPARATE log from the engine's (sdmc:/godot_stdout.log vs godot_boot.log),
+// so garbage on one stream immediately attributes to its producer. The write
+// path is serialized with a TLS-free spinlock (a thread with broken tpidr --
+// e.g. a stray Rust std::thread -- cannot take a libnx mutex) and each write
+// is length-capped: a wild "%s" on a bad pointer otherwise floods the card
+// with gigabytes of memory contents.
 static ssize_t log_write(struct _reent *r, void *fd, const char *ptr, size_t len) {
-	FILE *log = switch_log_get_file();
-	if (log) {
-		fwrite(ptr, 1, len, log);
+	static FILE *out_file = nullptr;
+	static char out_buffer[16 * 1024];
+	static std::atomic_flag out_lock = ATOMIC_FLAG_INIT;
+
+	while (out_lock.test_and_set(std::memory_order_acquire)) {
 	}
+	if (!out_file) {
+		out_file = fopen("sdmc:/godot_stdout.log", "w");
+		if (out_file) {
+			setvbuf(out_file, out_buffer, _IOFBF, sizeof(out_buffer));
+		}
+	}
+	if (out_file) {
+		size_t n = len;
+		if (n > 64 * 1024) {
+			fprintf(out_file, "\n[log_write: absurd len=%zu, truncating]\n", len);
+			n = 64 * 1024;
+		}
+		fwrite(ptr, 1, n, out_file);
+		fflush(out_file);
+	}
+	out_lock.clear(std::memory_order_release);
 	return len;
 }
 
@@ -93,8 +117,16 @@ static void setup_stdio() {
 	setvbuf(stderr, nullptr, _IONBF, 0);
 }
 
-// NVK runtime environment; must run before Main::setup brings up the display.
+// Mesa/NVK runtime environment; must run before Main::setup brings up the
+// display. Applies to all three rendering methods: Forward+ and Mobile talk
+// to NVK directly, the Compatibility renderer reaches it through zink.
 static void setup_nvk_env() {
+	// The Compatibility renderer runs GLES3 through Mesa's EGL stack; default
+	// its gallium backend to zink so every rendering method shares the one
+	// NVK driver. The native nvc0 gallium driver remains available with
+	// MESA_SWITCH_GL_DRIVER=nouveau (no overwrite: a user-set value wins).
+	setenv("MESA_SWITCH_GL_DRIVER", "zink", 0);
+
 	// Upstream NVK only exposes Turing+ GPUs; the Tegra X1's GM20B (Maxwell)
 	// is gated behind this opt-in. Without it vkEnumeratePhysicalDevices
 	// reports zero devices.
@@ -107,19 +139,12 @@ static void setup_nvk_env() {
 	setenv("RAYON_NUM_THREADS", "1", 1);
 	setenv("MESA_SHADER_COMPILER_THREADS", "1", 1);
 
-#ifdef DEBUG_ENABLED
-	// GPU-hang bring-up aid: make NVK sync after EVERY queue submit and, when
-	// one fails, dump that command buffer to stderr as decoded methods
-	// (nvk_queue.c push_sync + nvk_cmd_buffer_dump). Serializes submission, so
-	// it costs performance; remove once the renderer is stable on hardware.
-	//setenv("NVK_DEBUG", "push_sync", 1);
-	// Hang-point bisection: the drm shim splits each push into chunks of this
-	// many dwords at method boundaries with a syncpoint increment in between,
-	// so the drain diagnostic's `current` value names the exact chunk (= dword
-	// range in the push_sync dump) the GPU died in. 64 dwords ≈ a dozen
-	// methods per chunk.
-	//setenv("DRM_SHIM_BISECT", "64", 1);
-#endif
+	// Nothing on Horizon manages comptags, so framebuffer compression must
+	// stay off on GM20B. The ozuba driver already reports
+	// has_compression = false; keep the debug flag as a guard so a driver
+	// swap (e.g. back to a 26.2.1 libvulkan.a, which force-enabled it and
+	// wedged the first 3D opaque pass) cannot silently re-enable it.
+	setenv("NVK_DEBUG", "no_compression", 1);
 
 	// Point Mesa's on-disk shader cache at the SD card. Without a writable
 	// HOME/XDG dir, Mesa keeps its cache disabled on Horizon and NVK's NAK
@@ -129,11 +154,60 @@ static void setup_nvk_env() {
 	setenv("MESA_SHADER_CACHE_MAX_SIZE", "256M", 1);
 }
 
+// Optional per-run overrides read from sdmc:/godot_env.cfg, so driver knobs
+// (NVK_DEBUG=..., MESA_*=...) and engine arguments (--rendering-method ...)
+// can be flipped between runs over FTP without rebuilding the NRO. NAME=VALUE
+// lines override the environment set above; lines starting with "--" are
+// appended to the engine argument list; '#' starts a comment.
+static List<String> env_cfg_args;
+
+static void apply_env_cfg() {
+	FILE *f = fopen("sdmc:/godot_env.cfg", "rb");
+	if (!f) {
+		return;
+	}
+	char line[512];
+	while (fgets(line, sizeof(line), f)) {
+		char *s = line;
+		while (*s == ' ' || *s == '\t') {
+			s++;
+		}
+		char *end = s + strlen(s);
+		while (end > s && (end[-1] == '\n' || end[-1] == '\r' || end[-1] == ' ')) {
+			*--end = '\0';
+		}
+		if (*s == '\0' || *s == '#') {
+			continue;
+		}
+		if (s[0] == '-' && s[1] == '-') {
+			// Argument line; a space separates an argument from its value.
+			char *sp = strchr(s, ' ');
+			if (sp) {
+				*sp = '\0';
+				env_cfg_args.push_back(String::utf8(s));
+				env_cfg_args.push_back(String::utf8(sp + 1));
+			} else {
+				env_cfg_args.push_back(String::utf8(s));
+			}
+			printf("godot_env.cfg: arg %s\n", s);
+		} else {
+			char *eq = strchr(s, '=');
+			if (eq) {
+				*eq = '\0';
+				setenv(s, eq + 1, 1);
+				printf("godot_env.cfg: setenv %s=%s\n", s, eq + 1);
+			}
+		}
+	}
+	fclose(f);
+}
+
 int main(int argc, char *argv[]) {
 	socketInitializeDefault();
 	setup_stdio();
 	
 	setup_nvk_env();
+	apply_env_cfg();
 	Result romfs_res = romfsInit();
 	printf("godot_switch: boot, applet_type=%d romfs=0x%x\n", (int)appletGetAppletType(), (unsigned int)romfs_res);
 
@@ -144,37 +218,24 @@ int main(int argc, char *argv[]) {
 
 	setlocale(LC_CTYPE, "");
 
-	// Force the Forward Mobile renderer on Vulkan/NVK unless the user passed
-	// an explicit choice; it is the rendering method sized for the Tegra X1.
-	// (Forward+ also runs on NVK and can be requested with
-	// --rendering-method forward_plus.)
+	// All three rendering methods work on this driver stack: forward_plus and
+	// mobile over Vulkan/NVK, gl_compatibility over GLES3/zink. The project's
+	// rendering/renderer/rendering_method setting (or an explicit
+	// --rendering-method argument) picks one; nothing is forced here so the
+	// exported project's choice is respected.
 	List<String> args;
-	bool has_rendering_method = false;
 	bool has_main_pack = false;
 	for (int i = 1; i < argc; i++) {
-		if (strcmp(argv[i], "--rendering-method") == 0) {
-			has_rendering_method = true;
-		}
 		if (strcmp(argv[i], "--main-pack") == 0) {
 			has_main_pack = true;
 		}
 		args.push_back(String::utf8(argv[i]));
 	}
-	if (!has_rendering_method) {
-		args.push_back("--rendering-method");
-		args.push_back("mobile");
+	// Per-run overrides from sdmc:/godot_env.cfg (see apply_env_cfg). Later
+	// arguments win, so these override both argv and the project settings.
+	for (const String &arg : env_cfg_args) {
+		args.push_back(arg);
 	}
-
-#ifdef DEBUG_ENABLED
-	// Verbose stdout makes Godot register a VK_EXT_debug_utils messenger,
-	// which is the only way Mesa's vk_errorf() diagnostics (e.g. the precise
-	// reason a vkCreateDevice fails) reach the console on a release Mesa
-	// build; without it they are silently dropped.
-	//.push_back("--verbose");
-	// Sync after every breadcrumb so a GPU hang names the exact render pass
-	// instead of a window of them (pairs with NVK_DEBUG=push_sync above).
-	//args.push_back("--accurate-breadcrumbs");
-#endif
 
 	// Fused build: the editor's Switch exporter embeds the game pack in the
 	// NRO's RomFS as romfs:/game.pck. When RomFS mounted and no pack was given

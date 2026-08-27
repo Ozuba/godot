@@ -20,6 +20,12 @@ switch_lib = [
     "platform_thread.cpp",
 ]
 
+# Keep .symtab in the ELF even without debug_symbols: crash logs are
+# symbolized offline against bin/godot.switch.<target>.arm64, and elf2nro does
+# not carry the symbol table into the NRO anyway.
+if "-s" in env["LINKFLAGS"]:
+    env["LINKFLAGS"].remove("-s")
+
 prog = env.add_program("#bin/godot", switch_lib)
 
 dkp = os.environ["DEVKITPRO"]

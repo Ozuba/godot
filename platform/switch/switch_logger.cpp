@@ -32,6 +32,7 @@
 
 #include "switch_wrapper.h"
 
+#include <atomic>
 #include <cstdarg>
 
 static FILE *log_file = nullptr;
@@ -60,14 +61,26 @@ void SwitchLogger::logv(const char *p_format, va_list p_list, bool p_err) {
 
 	FILE *file = switch_log_get_file();
 	if (file) {
+		// Serialize and bound every message: concurrent vfprintf into the one
+		// buffered FILE from the render + resource threads can interleave or,
+		// with a corrupted format/argument, dump unbounded memory into the
+		// log. Format into a fixed buffer under a TLS-free spinlock instead.
+		static char msg[8192];
+		static std::atomic_flag lock = ATOMIC_FLAG_INIT;
+
 		va_list list_copy;
 		va_copy(list_copy, p_list);
-		vfprintf(file, p_format, list_copy);
-		va_end(list_copy);
-
+		while (lock.test_and_set(std::memory_order_acquire)) {
+		}
+		int len = vsnprintf(msg, sizeof(msg), p_format, list_copy);
+		if (len > 0) {
+			fwrite(msg, 1, MIN((size_t)len, sizeof(msg) - 1), file);
+		}
 		if (p_err || _flush_stdout_on_print) {
 			fflush(file);
 		}
+		lock.clear(std::memory_order_release);
+		va_end(list_copy);
 	}
 
 #ifdef DEBUG_ENABLED

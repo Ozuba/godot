@@ -1,4 +1,5 @@
 import os
+import sys
 from typing import TYPE_CHECKING
 
 from methods import print_error
@@ -32,9 +33,12 @@ def can_build():
 def get_opts():
     return [
         (
-            "switch_nvk_path",
-            "Path to the switch-nvk package (containing lib/libvulkan.a and include/vulkan)",
-            os.environ.get("SWITCH_NVK_PATH", ""),
+            "mesa_sdk_path",
+            "Path to the unified Mesa Horizon SDK prefix (containing lib/libvulkan.a, lib/libEGL.a and include/)",
+            os.environ.get(
+                "SWITCH_MESA_SDK",
+                "/workspaces/godot-switch/mesa-ozuba-unified-sdk/opt/devkitpro/portlibs/switch",
+            ),
         ),
     ]
 
@@ -51,15 +55,18 @@ def get_flags():
     return {
         "arch": "arm64",
         "target": "template_debug",
-        # The renderer is Vulkan over the statically linked NVK driver from the
-        # switch-nvk project (Mesa's open-source driver for the Tegra X1 GM20B,
-        # with a VK_NN_vi_surface WSI over the libnx nwindow).
+        # Forward+ and Mobile render through RenderingDevice on Vulkan over
+        # the statically linked NVK driver (Mesa's open-source driver for the
+        # Tegra X1 GM20B, with a VK_NN_vi_surface WSI over the libnx nwindow).
         "vulkan": True,
-        "use_volk": True,
-        # DEPRECATED: the old GLES3 compatibility renderer over the Mesa
-        # portlibs (libEGL/libGLESv2/libglapi). Build with opengl3=yes to get
-        # it back; it is scheduled for removal.
-        "opengl3": False,
+        # The SDK's libvulkan.a is a loaderless ICD that exports the full set
+        # of vk* entry points; Godot links them directly. volk must stay off:
+        # its writable vk* global function pointers would collide with those
+        # exported trampolines at link time.
+        "use_volk": False,
+        # The Compatibility renderer is GLES3 over the SDK's EGL stack,
+        # backed by zink (GL over the same NVK driver) by default.
+        "opengl3": True,
         "sdl": False,
         "accesskit": False,
         # PCRE2 JIT works through libnx jitCreate() (CodeMemory backend);
@@ -136,22 +143,45 @@ def configure(env: "SConsEnvironment"):
         ]
     )
 
+    # Unified Mesa Horizon SDK: one prefix carries the whole graphics stack as
+    # static archives. libvulkan.a is the self-contained NVK driver (NAK, NIL,
+    # the nouveau_horizon backend and a loaderless shim exporting every vk*
+    # entry point); libEGL.a carries the EGL frontend, the GL/GLES state
+    # tracker and two gallium backends (zink over NVK, and the native nvc0
+    # driver), presenting through the libnx nwindow.
+    mesa_sdk = env["mesa_sdk_path"]
+    if not os.path.isfile(os.path.join(mesa_sdk, "lib", "libvulkan.a")):
+        print_error("mesa_sdk_path does not contain lib/libvulkan.a: " + mesa_sdk)
+        sys.exit(255)
+    env.Prepend(CPPPATH=[os.path.join(mesa_sdk, "include")])
+    env.Prepend(LIBPATH=[os.path.join(mesa_sdk, "lib")])
+
+    # Static-archive link order: the GL stack pulls symbols from libvulkan.a
+    # (zink) and the mesa util archives, so those must come after it.
+    mesa_libs = []
+
     if env["vulkan"]:
-        # NVK (Mesa's open-source Vulkan driver) ported to the Tegra X1 by the
-        # Bypass switch-nvk and use externally built Vulkan
-        env.Append(LIBPATH=["/workspaces/godot-switch/builddir-switch/builddir-switch/src/nouveau/vulkan"])
-        env.Append(CPPPATH=["/workspaces/godot-switch/builddir-switch/builddir-switch/include"])
         env.Append(CPPDEFINES=["VULKAN_ENABLED", "RD_ENABLED", "VK_USE_PLATFORM_VI_NN"])
-        
-        # Link normal vulkan, but force whole-archive only on nak_rs to preserve its TLS sections
-        nak_rs_path = "/workspaces/godot-switch/builddir-switch/builddir-switch/src/nouveau/compiler/libnak_rs.a"
-        env.Append(LINKFLAGS=["-Wl,--whole-archive", nak_rs_path, "-Wl,--no-whole-archive"])
-        env.Append(LIBS=["vulkan", "expat"])
 
     if env["opengl3"]:
-        # DEPRECATED: GLES3 compatibility renderer over the Mesa GL portlibs.
-        print("WARNING: the GLES3/EGL renderer on the Mesa portlibs is deprecated; the supported renderer is Vulkan (NVK).")
         env.Append(CPPDEFINES=["GLES3_ENABLED"])
-        env.Append(LIBS=["EGL", "GLESv2", "glapi", "drm_nouveau"])
+        mesa_libs += ["EGL", "GLESv2", "glapi"]
+
+    if env["vulkan"] or env["opengl3"]:
+        mesa_libs += ["vulkan"]
+
+    if env["opengl3"]:
+        # zink (inside libEGL.a) uses Mesa's vk_format_*/vk_*_to_str helpers,
+        # which the localized ozuba libvulkan.a no longer exports; take them
+        # from the GL stack's own vintage of vulkan_util.
+        mesa_libs += ["vulkan_util"]
+
+    if env["opengl3"]:
+        mesa_libs += ["mesa_util", "mesa_util_c11", "mesa_util_simd", "blake3"]
+
+    if mesa_libs:
+        # expat (drirc), zlib + zstd (shader disk cache) come from the stock
+        # devkitPro portlibs.
+        env.Append(LIBS=mesa_libs + ["expat", "z", "zstd"])
 
     env.Append(LIBS=["nx", "m"])
