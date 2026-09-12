@@ -1225,41 +1225,6 @@ void SkyRD::setup_sky(const RenderDataRD *p_render_data, const Size2i p_screen_s
 	sky_scene_state.ubo.volumetric_fog_sky_affect = RendererSceneRenderRD::get_singleton()->environment_get_volumetric_fog_sky_affect(p_render_data->environment);
 	sky_scene_state.ubo.fog_use_legacy_blending = RendererSceneRenderRD::get_singleton()->fog_use_legacy_blending_get();
 
-	// GODOT_SKY_UBO_LOG=1 (via godot_env.cfg): log exactly what the CPU hands
-	// the driver for the sky scene UBO each frame, so a garbage
-	// directional_light_count seen by the shader (magenta-sky sentinel in
-	// sky.glsl) can be attributed: bad at write time = engine bug, good at
-	// write time but bad in the shader = delivery bug.
-	if (getenv("GODOT_SKY_UBO_LOG")) {
-		static uint64_t sky_ubo_frame = 0;
-		sky_ubo_frame++;
-		const uint8_t *raw = (const uint8_t *)&sky_scene_state.ubo;
-		uint32_t crc = 0xFFFFFFFFu;
-		for (size_t i = 0; i < sizeof(SkySceneState::UBO); i++) {
-			crc ^= raw[i];
-			for (int b = 0; b < 8; b++) {
-				crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
-			}
-		}
-		if (sky_ubo_frame <= 300 || (sky_ubo_frame % 60) == 0) {
-			printf("SKY_UBO f=%llu lights=%u z_far=%f fog=%u vfog=%u crc=%08x buf=%llu\n",
-					(unsigned long long)sky_ubo_frame,
-					sky_scene_state.ubo.directional_light_count,
-					sky_scene_state.ubo.z_far,
-					sky_scene_state.ubo.fog_enabled,
-					sky_scene_state.ubo.volumetric_fog_enabled,
-					crc ^ 0xFFFFFFFFu,
-					(unsigned long long)sky_scene_state.uniform_buffer.get_id());
-			fflush(stdout);
-		}
-		if (sky_scene_state.ubo.directional_light_count > 8) {
-			printf("SKY_UBO GARBAGE AT WRITE TIME: f=%llu lights=%u\n",
-					(unsigned long long)sky_ubo_frame,
-					sky_scene_state.ubo.directional_light_count);
-			fflush(stdout);
-		}
-	}
-
 	RD::get_singleton()->buffer_update(sky_scene_state.uniform_buffer, 0, sizeof(SkySceneState::UBO), &sky_scene_state.ubo);
 }
 

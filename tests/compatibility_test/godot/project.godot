@@ -11,4 +11,5 @@ config_version=5
 [application]
 
 config/name="CompatibilityTest"
+config/features=PackedStringArray("4.7")
 run/flush_stdout_on_print=true

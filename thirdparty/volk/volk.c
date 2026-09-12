@@ -88,7 +88,6 @@ VkResult volkInitialize(void)
 {
 #if defined(__SWITCH__)
 	/* godot-switch: no dynamic loader; use volkInitializeCustom(). */
-	void* module = NULL;
 	return VK_ERROR_INITIALIZATION_FAILED;
 #elif defined(_WIN32)
 	HMODULE module = LoadLibraryA("vulkan-1.dll");

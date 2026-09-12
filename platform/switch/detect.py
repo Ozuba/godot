@@ -37,7 +37,7 @@ def get_opts():
             "Path to the unified Mesa Horizon SDK prefix (containing lib/libvulkan.a, lib/libEGL.a and include/)",
             os.environ.get(
                 "SWITCH_MESA_SDK",
-                "/workspaces/godot-switch/mesa-ozuba-unified-sdk/opt/devkitpro/portlibs/switch",
+                "/workspaces/godot-switch/mesa-switch-sdk/opt/devkitpro/portlibs/switch",
             ),
         ),
     ]
